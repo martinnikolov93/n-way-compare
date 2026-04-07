@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>N-Way Sync</title>
+  <style>
+    #folders { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+    .folder-input { width: 500px; }
+  </style>
+</head>
+<body>
+  <h2>N-Way Folder Tool</h2>
+  <div id="folders">
+    <input class="folder-input" placeholder="Folder 1" />
+    <input class="folder-input" placeholder="Folder 2" />
+  </div>
+  <button id="addFolderBtn">Add Folder</button>
+  <button onclick="scan()">Scan</button>
+  <label><input type="checkbox" id="onlyDiff" /> Show only different</label>
+
+  <ul id="fileList"></ul>
+
+  <script src="renderer.js"></script>
+  <script>
+    const addBtn = document.getElementById('addFolderBtn');
+    const foldersDiv = document.getElementById('folders');
+
+    addBtn.addEventListener('click', () => {
+      const newInput = document.createElement('input');
+      newInput.className = 'folder-input';
+      newInput.placeholder = `Folder ${foldersDiv.children.length + 1}`;
+      foldersDiv.appendChild(newInput);
+    });
+  </script>
+</body>
+</html>
