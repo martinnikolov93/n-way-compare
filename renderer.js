@@ -11,37 +11,34 @@ async function scan() {
 }
 
 function groupFiles() {
-    const tree = {};
+    const root = {
+        __files: [],
+        __children: {}
+    };
 
     Object.keys(currentData).forEach(file => {
         const parts = file.split(/\\|\//);
-        let node = tree;
+        let node = root;
 
-        // create only folder nodes (exclude last part = file)
-        parts.slice(0, -1).forEach(part => {
-            if (!node[part]) {
-                node[part] = {
+        // минаваме през папките (без файла)
+        for (let i = 0; i < parts.length - 1; i++) {
+            const part = parts[i];
+
+            if (!node.__children[part]) {
+                node.__children[part] = {
                     __files: [],
                     __children: {}
                 };
             }
-            node = node[part].__children;
-        });
 
-        // add file to parent folder
-        const parent = parts.slice(0, -1).reduce((acc, part) => acc[part].__children, tree);
-        const folderNode = parts.length > 1 ? parts.slice(0, -1).reduce((acc, part) => acc[part], tree) : null;
-
-        if (folderNode) {
-            folderNode.__files.push(file);
-        } else {
-            // root-level files
-            if (!tree.__root) tree.__root = { __files: [], __children: {} };
-            tree.__root.__files.push(file);
+            node = node.__children[part];
         }
+
+        // добавяме файла в последната папка
+        node.__files.push(file);
     });
 
-    return tree;
+    return root.__children;
 }
 
 function render() {
@@ -133,7 +130,7 @@ function render() {
                 row.style.marginLeft = (depth * 10 + 10) + 'px';
 
                 const nameDiv = document.createElement('div');
-                nameDiv.innerText = file.split(/\\|\//).pop();
+                nameDiv.innerText = file.split(/\|\//).pop();
                 if (unique.size > 1) nameDiv.style.color = 'red';
                 row.appendChild(nameDiv);
 
