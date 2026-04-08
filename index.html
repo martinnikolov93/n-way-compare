@@ -18,6 +18,28 @@
   <button onclick="scan()">Scan</button>
   <label><input type="checkbox" id="onlyDiff" /> Show only different</label>
 
+  <!-- Legend / Header -->
+  <div style="margin:10px 0; padding:8px; border:1px solid #ccc; background:#f9f9f9;">
+    <b>Legend:</b>
+    <div>
+      🔘 <b>Source</b> (radio) → choose which version to copy FROM
+    </div>
+    <div>
+      ☑️ <b>Apply to</b> (checkbox) → choose which targets to copy TO
+    </div>
+    <div>
+      🔴 Red row/cell → file differs between folders
+    </div>
+  </div>
+
+  <!-- Table Header -->
+  <div id="tableHeader" style="display:grid; grid-template-columns:300px repeat(10,120px) 120px; font-weight:bold; border-bottom:2px solid black; padding:4px;">
+    <div>File</div>
+    <!-- dynamic columns inserted by JS -->
+    <div id="headerCols"></div>
+    <div>Actions</div>
+  </div>
+
   <ul id="fileList"></ul>
 
   <script src="renderer.js"></script>
