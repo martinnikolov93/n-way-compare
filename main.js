@@ -42,7 +42,7 @@ function scanDirs(baseDirs) {
                     if (!map[relative]) map[relative] = {};
                     map[relative][idx] = {
                         path: full,
-                        hash: hashFile(full)
+                        hash: getSmartHash(full)
                     };
                 }
             });
@@ -68,3 +68,36 @@ ipcMain.handle('open-diffuse', async (e, files) => {
     });
 
 });
+
+function normalizeContent(buffer) {
+    return buffer
+        .toString('utf8')
+        .replace(/\r\n/g, '\n') // CRLF → LF
+        .trim();                // маха trailing whitespace
+}
+
+function getFileHash(filePath) {
+    try {
+        const data = fs.readFileSync(filePath);
+
+        const normalized = normalizeContent(data);
+
+        return crypto
+            .createHash('md5')
+            .update(normalized)
+            .digest('hex');
+    } catch (e) {
+        return null;
+    }
+}
+
+function getSmartHash(filePath) {
+    // първо бърза проверка
+    const stat = fs.statSync(filePath);
+    const key = stat.size + '_' + stat.mtimeMs;
+
+    // после реален hash (по желание може да кешираш key → hash)
+    const hash = getFileHash(filePath);
+
+    return hash || key;
+}

@@ -20,7 +20,6 @@ function groupFiles() {
         const parts = file.split(/\\|\//);
         let node = root;
 
-        // минаваме през папките (без файла)
         for (let i = 0; i < parts.length - 1; i++) {
             const part = parts[i];
 
@@ -34,11 +33,27 @@ function groupFiles() {
             node = node.__children[part];
         }
 
-        // добавяме файла в последната папка
         node.__files.push(file);
     });
 
     return root.__children;
+}
+
+// 🔥 NEW: recursive diff check
+function nodeHasDiff(node) {
+    // files
+    for (const file of node.__files) {
+        const entries = currentData[file];
+        const hashes = Object.values(entries).map(x => x?.hash);
+        if (new Set(hashes).size > 1) return true;
+    }
+
+    // children
+    for (const child of Object.values(node.__children)) {
+        if (nodeHasDiff(child)) return true;
+    }
+
+    return false;
 }
 
 function render() {
@@ -72,17 +87,14 @@ function render() {
         const container = document.createElement('div');
 
         Object.entries(node).forEach(([name, data]) => {
-            if (name === '__root') return;
 
             const fullPath = path ? path + '/' + name : name;
 
-            let hasDiff = false;
+            // 🔥 FIX: recursive diff detection
+            const hasDiff = nodeHasDiff(data);
 
-            data.__files.forEach(file => {
-                const entries = currentData[file];
-                const hashes = Object.values(entries).map(x => x?.hash);
-                if (new Set(hashes).size > 1) hasDiff = true;
-            });
+            // 🔥 FIX: skip folder if no diff
+            if (onlyDiff && !hasDiff) return;
 
             const folderDiv = document.createElement('div');
             folderDiv.style.border = '1px solid #ccc';
@@ -116,11 +128,14 @@ function render() {
                 arrow.innerText = expanded ? '▼ ' : '▶ ';
             };
 
-            // files (no folder UI, just rows)
+            // 📄 FILES
             data.__files.forEach(file => {
                 const entries = currentData[file];
                 const hashes = Object.values(entries).map(x => x?.hash);
                 const unique = new Set(hashes);
+
+                // 🔥 FIX: skip identical files
+                if (onlyDiff && unique.size <= 1) return;
 
                 const row = document.createElement('div');
                 row.style.display = 'grid';
@@ -130,7 +145,7 @@ function render() {
                 row.style.marginLeft = (depth * 10 + 10) + 'px';
 
                 const nameDiv = document.createElement('div');
-                nameDiv.innerText = file.split(/\|\//).pop();
+                nameDiv.innerText = file.split(/\\|\//).pop();
                 if (unique.size > 1) nameDiv.style.color = 'red';
                 row.appendChild(nameDiv);
 
@@ -198,7 +213,7 @@ function render() {
                 content.appendChild(row);
             });
 
-            // children
+            // 📁 CHILDREN
             const childNodes = renderNode(data.__children, fullPath, depth + 1);
             content.appendChild(childNodes);
 
@@ -212,5 +227,8 @@ function render() {
 
     list.appendChild(renderNode(tree));
 }
+
+// 🔥 BONUS: auto refresh при toggle
+document.getElementById('onlyDiff').onchange = render;
 
 window.scan = scan;
