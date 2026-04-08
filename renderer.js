@@ -203,7 +203,10 @@ function render() {
                         .filter(cb => cb.checked && cb.value !== selectedSource)
                         .map(cb => cb.value);
 
-                    window.api.copyFile({ src: selectedSource, targets });
+                    // window.api.copyFile({ src: selectedSource, targets });
+                    window.api.copyFile({ src: selectedSource, targets })
+                        .then(() => alert('Copied!'))
+                        .catch(err => alert('Error: ' + err.message));
                 };
 
                 actions.appendChild(diffBtn);

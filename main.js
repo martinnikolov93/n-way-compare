@@ -69,6 +69,29 @@ ipcMain.handle('open-diffuse', async (e, files) => {
 
 });
 
+ipcMain.handle('copy-file', async (e, { src, targets }) => {
+    const fs = require('fs');
+    const path = require('path');
+
+    try {
+        targets.forEach(target => {
+            // създаваме директорията ако липсва
+            const dir = path.dirname(target);
+            if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+            }
+
+            // копираме файла
+            fs.copyFileSync(src, target);
+        });
+
+        return { success: true };
+    } catch (err) {
+        console.error('Copy error:', err);
+        throw err;
+    }
+});
+
 function normalizeContent(buffer) {
     return buffer
         .toString('utf8')
