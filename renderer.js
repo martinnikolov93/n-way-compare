@@ -56,6 +56,11 @@ function nodeHasDiff(node) {
     return false;
 }
 
+function getFolderName(fullPath) {
+    if (!fullPath) return '';
+    return fullPath.split(/\\|\//).filter(Boolean).pop();
+}
+
 function render() {
     const list = document.getElementById('fileList');
     const onlyDiff = document.getElementById('onlyDiff').checked;
@@ -102,9 +107,12 @@ function render() {
             folderDiv.style.marginLeft = (depth * 10) + 'px';
 
             const header = document.createElement('div');
+            header.style.display = 'grid';
+            header.style.gridTemplateColumns = `300px repeat(${dirs.length}, 120px) 120px`;
             header.style.cursor = 'pointer';
             header.style.background = '#eee';
             header.style.padding = '4px';
+            header.style.borderBottom = '1px solid #bbb';
 
             let expanded = hasDiff;
 
@@ -115,8 +123,31 @@ function render() {
             const title = document.createElement('span');
             title.innerText = '📁 ' + name;
 
-            header.appendChild(arrow);
-            header.appendChild(title);
+            // first column (folder name)
+            const nameCol = document.createElement('div');
+            nameCol.appendChild(arrow);
+            nameCol.appendChild(title);
+
+            header.appendChild(nameCol);
+
+            // 🔥 добавяме root имената като колони
+            dirs.forEach(dir => {
+                const col = document.createElement('div');
+                col.innerText = getFolderName(dir);
+                col.style.textAlign = 'center';
+                // col.style.fontWeight = 'bold';
+                col.style.fontSize = '12px';
+                col.style.whiteSpace = 'nowrap';
+                col.style.overflow = 'hidden';
+                col.style.textOverflow = 'ellipsis';
+                col.style.padding = '0 6px';
+                col.style.minWidth = '80px';
+                header.appendChild(col);
+            });
+
+            // празна колона за actions
+            const empty = document.createElement('div');
+            header.appendChild(empty);
 
             const content = document.createElement('div');
             content.className = 'folder-content';
