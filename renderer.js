@@ -12,6 +12,7 @@ async function scan() {
 
 function groupFiles() {
     const root = {
+        name: 'root',
         __files: [],
         __children: {}
     };
@@ -25,6 +26,7 @@ function groupFiles() {
 
             if (!node.__children[part]) {
                 node.__children[part] = {
+                    name: part,
                     __files: [],
                     __children: {}
                 };
@@ -36,7 +38,7 @@ function groupFiles() {
         node.__files.push(file);
     });
 
-    return root.__children;
+    return root;
 }
 
 // 🔥 NEW: recursive diff check
@@ -44,7 +46,7 @@ function nodeHasDiff(node) {
     // files
     for (const file of node.__files) {
         const entries = currentData[file];
-        const hashes = Object.values(entries).map(x => x?.hash);
+        const hashes = dirs.map((_, i) => entries[i]?.hash || '__MISSING__');
         if (new Set(hashes).size > 1) return true;
     }
 
@@ -92,7 +94,7 @@ function render() {
         const container = document.createElement('div');
 
         Object.entries(node).forEach(([name, data]) => {
-
+            const isRoot = name === 'root';
             const fullPath = path ? path + '/' + name : name;
 
             // 🔥 FIX: recursive diff detection
@@ -121,7 +123,7 @@ function render() {
             arrow.innerText = expanded ? '▼ ' : '▶ ';
 
             const title = document.createElement('span');
-            title.innerText = '📁 ' + name;
+            title.innerText = isRoot ? '📁 root' : '📁 ' + name;
 
             // first column (folder name)
             const nameCol = document.createElement('div');
@@ -162,7 +164,7 @@ function render() {
             // 📄 FILES
             data.__files.forEach(file => {
                 const entries = currentData[file];
-                const hashes = Object.values(entries).map(x => x?.hash);
+                const hashes = dirs.map((_, i) => entries[i]?.hash || '__MISSING__');
                 const unique = new Set(hashes);
 
                 // 🔥 FIX: skip identical files
@@ -188,7 +190,29 @@ function render() {
                     const entry = entries[idx];
 
                     if (!entry) {
-                        cell.innerText = '—';
+                        const wrapper = document.createElement('div');
+
+                        // ❌ визуално показва липсващ файл
+                        const missing = document.createElement('span');
+                        missing.innerText = '❌';
+                        missing.title = 'File missing in this folder';
+
+                        // ☑️ позволяваме да бъде target
+                        const cb = document.createElement('input');
+                        cb.type = 'checkbox';
+
+                        // ⚠️ много важно: тук задаваме target path
+                        const targetPath = file; // относителен път
+                        cb.value = dirs[idx] + '/' + targetPath;
+
+                        checkboxes.push(cb);
+
+                        wrapper.appendChild(missing);
+                        wrapper.appendChild(cb);
+
+                        wrapper.style.background = '#ffecec';
+
+                        cell.appendChild(wrapper);
                         row.appendChild(cell);
                         return;
                     }
@@ -259,7 +283,7 @@ function render() {
         return container;
     }
 
-    list.appendChild(renderNode(tree));
+    list.appendChild(renderNode({ root: tree }));
 }
 
 // 🔥 BONUS: auto refresh при toggle
