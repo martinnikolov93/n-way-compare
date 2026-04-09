@@ -4,9 +4,16 @@ let dirs = [];
 // 🔥 collapse/expand cache
 const collapseState = {};
 
+let lastWatchedDirs = [];
+
+function arraysEqual(a, b) {
+    return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
 async function scan(resetCache = false) {
     const inputs = document.querySelectorAll('.folder-input');
     dirs = Array.from(inputs).map(i => i.value.trim()).filter(Boolean);
+
     if (dirs.length < 2) return alert('Please enter at least 2 folders');
 
     if (resetCache) {
@@ -16,10 +23,10 @@ async function scan(resetCache = false) {
     currentData = await window.api.scan(dirs);
     render();
 
-    // 🔥 стартираме watch (само веднъж)
-    if (!window.isWatching) {
+    // 🔥 само ако има промяна
+    if (!arraysEqual(dirs, lastWatchedDirs)) {
         window.api.watchFolders(dirs);
-        window.isWatching = true;
+        lastWatchedDirs = [...dirs];
     }
 }
 
