@@ -114,13 +114,21 @@ function getFileHash(filePath) {
     }
 }
 
+const hashCache = new Map();
+
 function getSmartHash(filePath) {
-    // първо бърза проверка
     const stat = fs.statSync(filePath);
     const key = stat.size + '_' + stat.mtimeMs;
 
-    // после реален hash (по желание може да кешираш key → hash)
+    // ✅ ако вече сме го смятали → връщаме кеша
+    if (hashCache.has(filePath) && hashCache.get(filePath).key === key) {
+        return hashCache.get(filePath).hash;
+    }
+
+    // ❗ само ако има промяна → правим hash
     const hash = getFileHash(filePath);
 
-    return hash || key;
+    hashCache.set(filePath, { key, hash });
+
+    return hash;
 }

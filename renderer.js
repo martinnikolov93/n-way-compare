@@ -195,7 +195,7 @@ function render() {
                 };
 
                 const copyBtn = document.createElement('button');
-                copyBtn.innerText = 'Apply';
+                copyBtn.innerText = 'Copy';
                 copyBtn.onclick = () => {
                     if (!selectedSource) return alert('Select source');
 
