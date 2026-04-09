@@ -36,26 +36,28 @@ function groupFiles() {
         __children: {}
     };
 
-    Object.keys(currentData).forEach(file => {
-        const parts = file.split(/\\|\//);
-        let node = root;
+    Object.keys(currentData)
+        .sort((a, b) => a.localeCompare(b))
+        .forEach(file => {
+            const parts = file.split(/\\|\//);
+            let node = root;
 
-        for (let i = 0; i < parts.length - 1; i++) {
-            const part = parts[i];
+            for (let i = 0; i < parts.length - 1; i++) {
+                const part = parts[i];
 
-            if (!node.__children[part]) {
-                node.__children[part] = {
-                    name: part,
-                    __files: [],
-                    __children: {}
-                };
+                if (!node.__children[part]) {
+                    node.__children[part] = {
+                        name: part,
+                        __files: [],
+                        __children: {}
+                    };
+                }
+
+                node = node.__children[part];
             }
 
-            node = node.__children[part];
-        }
-
-        node.__files.push(file);
-    });
+            node.__files.push(file);
+        });
 
     return root;
 }
