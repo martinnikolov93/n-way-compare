@@ -1,14 +1,33 @@
 let currentData = {};
 let dirs = [];
 
-async function scan() {
+// 🔥 collapse/expand cache
+const collapseState = {};
+
+async function scan(resetCache = false) {
     const inputs = document.querySelectorAll('.folder-input');
     dirs = Array.from(inputs).map(i => i.value.trim()).filter(Boolean);
     if (dirs.length < 2) return alert('Please enter at least 2 folders');
 
+    if (resetCache) {
+        for (let k in collapseState) delete collapseState[k];
+    }
+
     currentData = await window.api.scan(dirs);
     render();
+
+    // 🔥 стартираме watch (само веднъж)
+    if (!window.isWatching) {
+        window.api.watchFolders(dirs);
+        window.isWatching = true;
+    }
 }
+
+// автоматичен scan при промяна
+window.api.onFolderChange(() => {
+    console.log('Folder changed → rescanning');
+    scan(); // пази collapseState
+});
 
 function groupFiles() {
     const root = {
@@ -41,16 +60,14 @@ function groupFiles() {
     return root;
 }
 
-// 🔥 NEW: recursive diff check
+// 🔥 recursive diff check
 function nodeHasDiff(node) {
-    // files
     for (const file of node.__files) {
         const entries = currentData[file];
         const hashes = dirs.map((_, i) => entries[i]?.hash || '__MISSING__');
         if (new Set(hashes).size > 1) return true;
     }
 
-    // children
     for (const child of Object.values(node.__children)) {
         if (nodeHasDiff(child)) return true;
     }
@@ -83,11 +100,13 @@ function render() {
     expandBtn.onclick = () => {
         document.querySelectorAll('.folder-content').forEach(el => el.style.display = 'block');
         document.querySelectorAll('.folder-arrow').forEach(el => el.innerText = '▼ ');
+        Object.keys(collapseState).forEach(k => collapseState[k] = true);
     };
 
     collapseBtn.onclick = () => {
         document.querySelectorAll('.folder-content').forEach(el => el.style.display = 'none');
         document.querySelectorAll('.folder-arrow').forEach(el => el.innerText = '▶ ');
+        Object.keys(collapseState).forEach(k => collapseState[k] = false);
     };
 
     function renderNode(node, path = '', depth = 0) {
@@ -96,11 +115,9 @@ function render() {
         Object.entries(node).forEach(([name, data]) => {
             const isRoot = name === 'root';
             const fullPath = path ? path + '/' + name : name;
-
-            // 🔥 FIX: recursive diff detection
             const hasDiff = nodeHasDiff(data);
 
-            // 🔥 FIX: skip folder if no diff
+            // skip folder if onlyDiff и няма разлика
             if (onlyDiff && !hasDiff) return;
 
             const folderDiv = document.createElement('div');
@@ -116,7 +133,15 @@ function render() {
             header.style.padding = '4px';
             header.style.borderBottom = '1px solid #bbb';
 
-            let expanded = hasDiff;
+            // 🔥 collapse/expand state
+            const nodeId = fullPath;
+            let expanded;
+            if (collapseState[nodeId] !== undefined) {
+                expanded = collapseState[nodeId];
+            } else {
+                expanded = hasDiff; // default behavior
+                collapseState[nodeId] = expanded;
+            }
 
             const arrow = document.createElement('span');
             arrow.className = 'folder-arrow';
@@ -125,19 +150,15 @@ function render() {
             const title = document.createElement('span');
             title.innerText = isRoot ? '📁 root' : '📁 ' + name;
 
-            // first column (folder name)
             const nameCol = document.createElement('div');
             nameCol.appendChild(arrow);
             nameCol.appendChild(title);
-
             header.appendChild(nameCol);
 
-            // 🔥 добавяме root имената като колони
             dirs.forEach(dir => {
                 const col = document.createElement('div');
                 col.innerText = getFolderName(dir);
                 col.style.textAlign = 'center';
-                // col.style.fontWeight = 'bold';
                 col.style.fontSize = '12px';
                 col.style.whiteSpace = 'nowrap';
                 col.style.overflow = 'hidden';
@@ -147,7 +168,6 @@ function render() {
                 header.appendChild(col);
             });
 
-            // празна колона за actions
             const empty = document.createElement('div');
             header.appendChild(empty);
 
@@ -157,6 +177,7 @@ function render() {
 
             header.onclick = () => {
                 expanded = !expanded;
+                collapseState[nodeId] = expanded; // update cache
                 content.style.display = expanded ? 'block' : 'none';
                 arrow.innerText = expanded ? '▼ ' : '▶ ';
             };
@@ -166,8 +187,6 @@ function render() {
                 const entries = currentData[file];
                 const hashes = dirs.map((_, i) => entries[i]?.hash || '__MISSING__');
                 const unique = new Set(hashes);
-
-                // 🔥 FIX: skip identical files
                 if (onlyDiff && unique.size <= 1) return;
 
                 const row = document.createElement('div');
@@ -191,27 +210,16 @@ function render() {
 
                     if (!entry) {
                         const wrapper = document.createElement('div');
-
-                        // ❌ визуално показва липсващ файл
                         const missing = document.createElement('span');
                         missing.innerText = '❓';
                         missing.title = 'File missing in this folder (can copy here)';
-
-                        // ☑️ позволяваме да бъде target
                         const cb = document.createElement('input');
                         cb.type = 'checkbox';
-
-                        // ⚠️ много важно: тук задаваме target path
-                        const targetPath = file; // относителен път
-                        cb.value = dirs[idx] + '/' + targetPath;
-
+                        cb.value = dirs[idx] + '/' + file;
                         checkboxes.push(cb);
-
                         wrapper.appendChild(missing);
                         wrapper.appendChild(cb);
-
-                        wrapper.style.background = '#fff3cd'; // жълтеникаво
-
+                        wrapper.style.background = '#fff3cd';
                         cell.appendChild(wrapper);
                         row.appendChild(cell);
                         return;
@@ -234,14 +242,12 @@ function render() {
                     delBtn.style.cursor = 'pointer';
                     delBtn.style.marginLeft = '4px';
                     delBtn.title = 'Delete this file from this folder';
-
                     delBtn.onclick = () => {
                         if (!confirm('Delete this file?')) return;
-
                         window.api.deleteFile(entry.path)
                             .then(() => {
                                 alert('Deleted!');
-                                scan(); // refresh
+                                scan();
                             })
                             .catch(err => alert('Error: ' + err.message));
                     };
@@ -259,7 +265,6 @@ function render() {
                 });
 
                 const actions = document.createElement('div');
-
                 const diffBtn = document.createElement('button');
                 diffBtn.innerText = 'Diff';
                 diffBtn.onclick = () => {
@@ -271,23 +276,17 @@ function render() {
                 copyBtn.innerText = 'Copy';
                 copyBtn.onclick = () => {
                     if (!selectedSource) return alert('Select source');
-
-                    const targets = checkboxes
-                        .filter(cb => cb.checked && cb.value !== selectedSource)
-                        .map(cb => cb.value);
-
-                    // window.api.copyFile({ src: selectedSource, targets });
+                    const targets = checkboxes.filter(cb => cb.checked && cb.value !== selectedSource).map(cb => cb.value);
                     window.api.copyFile({ src: selectedSource, targets })
                         .then(() => {
                             alert('Copied!');
-                            scan(); // refresh
+                            scan();
                         })
                         .catch(err => alert('Error: ' + err.message));
                 };
 
                 actions.appendChild(diffBtn);
                 actions.appendChild(copyBtn);
-
                 row.appendChild(actions);
                 content.appendChild(row);
             });
@@ -307,7 +306,7 @@ function render() {
     list.appendChild(renderNode({ root: tree }));
 }
 
-// 🔥 BONUS: auto refresh при toggle
+// 🔥 auto refresh при toggle
 document.getElementById('onlyDiff').onchange = render;
 
 window.scan = scan;

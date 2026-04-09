@@ -18,6 +18,45 @@ function createWindow() {
 
 app.whenReady().then(createWindow);
 
+const chokidar = require('chokidar');
+let folderWatcher = null;
+
+// функция за watch
+function watchFolders(folders) {
+    // спираме стария watcher
+    if (folderWatcher) folderWatcher.close();
+
+    // нов watcher
+    folderWatcher = chokidar.watch(folders, {
+        ignoreInitial: true, // не стартираме при инициализация
+        persistent: true,
+        depth: 99
+    });
+
+    // дебаунс
+    let scanTimeout = null;
+    const triggerScan = () => {
+        if (scanTimeout) clearTimeout(scanTimeout);
+        scanTimeout = setTimeout(() => {
+            scanTimeout = null;
+            // уведомяваме renderer
+            BrowserWindow.getAllWindows().forEach(win => {
+                win.webContents.send('folder-changed');
+            });
+        }, 500); // 0.5s delay
+    };
+
+    folderWatcher.on('all', (event, path) => {
+        console.log('Folder change detected:', event, path);
+        triggerScan();
+    });
+}
+
+// IPC за стартиране на watch
+ipcMain.handle('watch-folders', async (e, folders) => {
+    watchFolders(folders);
+});
+
 function hashFile(filePath) {
     try {
         const stat = fs.statSync(filePath);
