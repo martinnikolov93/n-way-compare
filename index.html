@@ -11,7 +11,7 @@
 <body>
   <h2>N-Way Folder Compare Tool</h2>
   <div id="folders">
-    <input class="folder-input" placeholder="Folder 1" />
+    <input class="folder-input" placeholder="Folder 1 Source" />
     <input class="folder-input" placeholder="Folder 2" />
   </div>
   <button id="addFolderBtn">Add Folder</button>
@@ -31,7 +31,10 @@
       🔴 Red row/cell → file differs between folders
     </div>
     <div>
-      ❌ <b>Missing file</b> → file does not exist in this folder (can be selected as target)
+      ❓ <b>Missing file</b> → file does not exist (can copy here)
+    </div>
+    <div>
+      ❌ <b>Delete</b> → remove file from this folder
     </div>
   </div>
 

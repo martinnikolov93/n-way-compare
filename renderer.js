@@ -194,8 +194,8 @@ function render() {
 
                         // ❌ визуално показва липсващ файл
                         const missing = document.createElement('span');
-                        missing.innerText = '❌';
-                        missing.title = 'File missing in this folder';
+                        missing.innerText = '❓';
+                        missing.title = 'File missing in this folder (can copy here)';
 
                         // ☑️ позволяваме да бъде target
                         const cb = document.createElement('input');
@@ -210,7 +210,7 @@ function render() {
                         wrapper.appendChild(missing);
                         wrapper.appendChild(cb);
 
-                        wrapper.style.background = '#ffecec';
+                        wrapper.style.background = '#fff3cd'; // жълтеникаво
 
                         cell.appendChild(wrapper);
                         row.appendChild(cell);
@@ -229,8 +229,26 @@ function render() {
                     cb.value = entry.path;
                     checkboxes.push(cb);
 
+                    const delBtn = document.createElement('span');
+                    delBtn.innerText = '❌';
+                    delBtn.style.cursor = 'pointer';
+                    delBtn.style.marginLeft = '4px';
+                    delBtn.title = 'Delete this file from this folder';
+
+                    delBtn.onclick = () => {
+                        if (!confirm('Delete this file?')) return;
+
+                        window.api.deleteFile(entry.path)
+                            .then(() => {
+                                alert('Deleted!');
+                                scan(); // refresh
+                            })
+                            .catch(err => alert('Error: ' + err.message));
+                    };
+
                     wrapper.appendChild(radio);
                     wrapper.appendChild(cb);
+                    wrapper.appendChild(delBtn);
 
                     if (unique.size > 1 && entry.hash !== hashes[0]) {
                         wrapper.style.background = '#ffdddd';
@@ -260,7 +278,10 @@ function render() {
 
                     // window.api.copyFile({ src: selectedSource, targets });
                     window.api.copyFile({ src: selectedSource, targets })
-                        .then(() => alert('Copied!'))
+                        .then(() => {
+                            alert('Copied!');
+                            scan(); // refresh
+                        })
                         .catch(err => alert('Error: ' + err.message));
                 };
 

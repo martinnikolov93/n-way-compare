@@ -92,6 +92,20 @@ ipcMain.handle('copy-file', async (e, { src, targets }) => {
     }
 });
 
+ipcMain.handle('delete-file', async (e, filePath) => {
+    const fs = require('fs');
+
+    try {
+        if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+        }
+        return { success: true };
+    } catch (err) {
+        console.error('Delete error:', err);
+        throw err;
+    }
+});
+
 function normalizeContent(buffer) {
     return buffer
         .toString('utf8')
