@@ -150,7 +150,7 @@ function render() {
 
             const header = document.createElement('div');
             header.style.display = 'grid';
-            header.style.gridTemplateColumns = `300px repeat(${dirs.length}, 120px) 120px`;
+            header.style.gridTemplateColumns = `300px repeat(${dirs.length}, 135px) 135px`;
             // header.style.cursor = 'pointer';
             header.style.background = '#eee';
             header.style.padding = '4px';
@@ -331,7 +331,7 @@ function render() {
 
                 const row = document.createElement('div');
                 row.style.display = 'grid';
-                row.style.gridTemplateColumns = `300px repeat(${dirs.length}, 120px) 120px`;
+                row.style.gridTemplateColumns = `300px repeat(${dirs.length}, 135px) 135px`;
                 row.style.borderBottom = '1px solid #ddd';
                 row.style.padding = '2px';
                 // row.style.marginLeft = (depth * 10 + 10) + 'px';

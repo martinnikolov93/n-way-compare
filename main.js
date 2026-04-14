@@ -238,12 +238,26 @@ ipcMain.handle('copy-folder', async (e, { src, targets }) => {
 
 ipcMain.handle('delete-folder', async (e, folderPath) => {
     const fs = require('fs');
+    const path = require('path');
+
+    function deleteRecursive(dir) {
+        if (!fs.existsSync(dir)) return;
+
+        fs.readdirSync(dir, { withFileTypes: true }).forEach(entry => {
+            const fullPath = path.join(dir, entry.name);
+
+            if (entry.isDirectory()) {
+                deleteRecursive(fullPath);
+            } else {
+                fs.unlinkSync(fullPath);
+            }
+        });
+
+        fs.rmdirSync(dir);
+    }
 
     try {
-        if (fs.existsSync(folderPath)) {
-            fs.rmSync(folderPath, { recursive: true, force: true });
-        }
-
+        deleteRecursive(folderPath);
         return { success: true };
     } catch (err) {
         console.error('Folder delete error:', err);
