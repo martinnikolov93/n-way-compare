@@ -111,6 +111,24 @@ ipcMain.handle('load-config', async () => {
     }
 });
 
+ipcMain.handle('save-config', async (e, data) => {
+    const { dialog } = require('electron');
+
+    const result = await dialog.showSaveDialog({
+        filters: [{ name: 'JSON', extensions: ['json'] }]
+    });
+
+    if (result.canceled) return;
+
+    try {
+        fs.writeFileSync(result.filePath, JSON.stringify(data, null, 2), 'utf-8');
+        return { success: true };
+    } catch (err) {
+        console.error('Save error:', err);
+        throw err;
+    }
+});
+
 ipcMain.handle('scan', async (e, dirs) => scanDirs(dirs));
 
 ipcMain.handle('open-diffuse', async (e, files) => {

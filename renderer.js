@@ -384,5 +384,24 @@ async function loadConfig() {
     }
 }
 
+async function saveConfig() {
+    try {
+        const inputs = document.querySelectorAll('.folder-input');
+        const paths = Array.from(inputs)
+            .map(i => i.value.trim())
+            .filter(Boolean);
+
+        if (paths.length < 2) {
+            return alert('Add at least 2 folders to save config');
+        }
+
+        await window.api.saveConfig(paths);
+        alert('Config saved!');
+    } catch (err) {
+        alert('Error saving config: ' + err.message);
+    }
+}
+
+window.saveConfig = saveConfig;
 window.loadConfig = loadConfig;
 window.scan = scan;
