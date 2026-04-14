@@ -10,4 +10,6 @@ contextBridge.exposeInMainWorld('api', {
     loadConfig: () => ipcRenderer.invoke('load-config'),
     saveConfig: (data) => ipcRenderer.invoke('save-config', data),
     runCommand: (data) => ipcRenderer.invoke('run-command', data),
+    copyFolder: (data) => ipcRenderer.invoke('copy-folder', data),
+    deleteFolder: (path) => ipcRenderer.invoke('delete-folder', path),
 });

@@ -203,6 +203,54 @@ ipcMain.handle('delete-file', async (e, filePath) => {
     }
 });
 
+ipcMain.handle('copy-folder', async (e, { src, targets }) => {
+    const fs = require('fs');
+    const path = require('path');
+
+    function copyRecursive(srcDir, destDir) {
+        if (!fs.existsSync(destDir)) {
+            fs.mkdirSync(destDir, { recursive: true });
+        }
+
+        fs.readdirSync(srcDir, { withFileTypes: true }).forEach(entry => {
+            const srcPath = path.join(srcDir, entry.name);
+            const destPath = path.join(destDir, entry.name);
+
+            if (entry.isDirectory()) {
+                copyRecursive(srcPath, destPath);
+            } else {
+                fs.copyFileSync(srcPath, destPath);
+            }
+        });
+    }
+
+    try {
+        targets.forEach(target => {
+            copyRecursive(src, target);
+        });
+
+        return { success: true };
+    } catch (err) {
+        console.error('Folder copy error:', err);
+        throw err;
+    }
+});
+
+ipcMain.handle('delete-folder', async (e, folderPath) => {
+    const fs = require('fs');
+
+    try {
+        if (fs.existsSync(folderPath)) {
+            fs.rmSync(folderPath, { recursive: true, force: true });
+        }
+
+        return { success: true };
+    } catch (err) {
+        console.error('Folder delete error:', err);
+        throw err;
+    }
+});
+
 function normalizeContent(buffer) {
     return buffer
         .toString('utf8')

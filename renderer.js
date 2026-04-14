@@ -89,6 +89,11 @@ function getFolderName(fullPath) {
     return fullPath.split(/\\|\//).filter(Boolean).pop();
 }
 
+function folderExistsInDir(dirIndex, node) {
+    return node.__files.some(file => currentData[file]?.[dirIndex]) ||
+        Object.values(node.__children).some(child => folderExistsInDir(dirIndex, child));
+}
+
 function render() {
     const list = document.getElementById('fileList');
     const onlyDiff = document.getElementById('onlyDiff').checked;
@@ -139,7 +144,7 @@ function render() {
             const header = document.createElement('div');
             header.style.display = 'grid';
             header.style.gridTemplateColumns = `300px repeat(${dirs.length}, 120px) 120px`;
-            header.style.cursor = 'pointer';
+            // header.style.cursor = 'pointer';
             header.style.background = '#eee';
             header.style.padding = '4px';
             header.style.borderBottom = '1px solid #bbb';
@@ -157,6 +162,13 @@ function render() {
             const arrow = document.createElement('span');
             arrow.className = 'folder-arrow';
             arrow.innerText = expanded ? '▼ ' : '▶ ';
+            arrow.style.cursor = 'pointer';
+            arrow.onclick = () => {
+                expanded = !expanded;
+                collapseState[nodeId] = expanded; // update cache
+                content.style.display = expanded ? 'block' : 'none';
+                arrow.innerText = expanded ? '▼ ' : '▶ ';
+            };
 
             const title = document.createElement('span');
 
@@ -174,32 +186,134 @@ function render() {
             nameCol.appendChild(title);
             header.appendChild(nameCol);
 
-            dirs.forEach(dir => {
+            let selectedSourceFolder = null;
+            const folderCheckboxes = [];
+
+            dirs.forEach((dir, idx) => {
                 const col = document.createElement('div');
-                col.innerText = getFolderName(dir);
-                col.style.textAlign = 'center';
-                col.style.fontSize = '12px';
-                col.style.whiteSpace = 'nowrap';
-                col.style.overflow = 'hidden';
-                col.style.textOverflow = 'ellipsis';
-                col.style.padding = '0 6px';
-                col.style.minWidth = '80px';
+                const wrapper = document.createElement('div');
+                wrapper.style.padding = '0 6px';
+                wrapper.style.minWidth = '80px';
+                wrapper.style.textAlign = 'center';
+
+                // ⚠️ реален път към тази подпапка
+                const folderPath = isRoot
+                    ? dir
+                    : dir + '/' + fullPath.replace(/^root[\\/]/, '');
+
+                const exists = folderExistsInDir(idx, data);
+
+                // 🔘 source radio
+                const radio = document.createElement('input');
+                radio.type = 'radio';
+                radio.name = 'folder-' + fullPath;
+                radio.disabled = !exists; // не може да е source ако липсва
+                radio.onclick = (e) => {
+                    e.stopPropagation();
+                    selectedSourceFolder = folderPath;
+                };
+
+
+                // ☑️ target checkbox
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.value = folderPath;
+                cb.onclick = (e) => {
+                    e.stopPropagation();
+                };
+                folderCheckboxes.push(cb);
+
+                const label = document.createElement('div');
+                label.innerText = getFolderName(dir);
+                label.style.fontSize = '12px';
+                label.style.whiteSpace = 'nowrap';
+                label.style.overflow = 'hidden';
+                label.style.textOverflow = 'ellipsis';
+
+                wrapper.appendChild(label);
+
+                // ❓ missing indicator
+                if (!exists) {
+                    const missing = document.createElement('span');
+                    missing.innerText = '❓';
+                    missing.title = 'Folder missing in this location';
+                    wrapper.appendChild(missing);
+                }
+                wrapper.appendChild(radio);
+                wrapper.appendChild(cb);
+
+                // 🔥 визуално highlight ако липсва
+                if (!exists) {
+                    wrapper.style.background = '#fff3cd';
+                }
+
+                col.appendChild(wrapper);
                 header.appendChild(col);
             });
 
-            const empty = document.createElement('div');
-            header.appendChild(empty);
+            const actions = document.createElement('div');
+            actions.style.display = 'flex';
+            actions.style.gap = '4px';
+
+            // 📁 COPY
+            const copyBtn = document.createElement('button');
+            copyBtn.innerText = 'Copy';
+
+            copyBtn.onclick = () => {
+                if (!selectedSourceFolder) return alert('Select source folder');
+
+                const targets = folderCheckboxes
+                    .filter(cb => cb.checked && cb.value !== selectedSourceFolder)
+                    .map(cb => cb.value);
+
+                if (!targets.length) return alert('No targets selected');
+
+                window.api.copyFolder({ src: selectedSourceFolder, targets })
+                    .then(() => {
+                        alert('Folder copied!');
+                        scan();
+                    })
+                    .catch(err => alert(err.message));
+            };
+
+            // ❌ DELETE
+            const deleteBtn = document.createElement('button');
+            deleteBtn.innerText = 'Delete';
+            deleteBtn.style.color = 'red';
+
+            deleteBtn.onclick = () => {
+                const targets = folderCheckboxes
+                    .filter(cb => cb.checked)
+                    .map(cb => cb.value);
+
+                if (!targets.length) return alert('No targets selected');
+
+                // if (!confirm('Delete selected folders?')) return;
+                if (!confirm(`Delete selected folders?\n${targets.join('\n')}`)) return;
+
+                Promise.all(targets.map(t => window.api.deleteFolder(t)))
+                    .then(() => {
+                        alert('Deleted!');
+                        scan();
+                    })
+                    .catch(err => alert(err.message));
+            };
+
+            actions.appendChild(copyBtn);
+            actions.appendChild(deleteBtn);
+
+            header.appendChild(actions);
 
             const content = document.createElement('div');
             content.className = 'folder-content';
             content.style.display = expanded ? 'block' : 'none';
 
-            header.onclick = () => {
-                expanded = !expanded;
-                collapseState[nodeId] = expanded; // update cache
-                content.style.display = expanded ? 'block' : 'none';
-                arrow.innerText = expanded ? '▼ ' : '▶ ';
-            };
+            // header.onclick = () => {
+            //     expanded = !expanded;
+            //     collapseState[nodeId] = expanded; // update cache
+            //     content.style.display = expanded ? 'block' : 'none';
+            //     arrow.innerText = expanded ? '▼ ' : '▶ ';
+            // };
 
             // 📄 FILES
             data.__files.forEach(file => {
@@ -240,12 +354,14 @@ function render() {
                         wrapper.appendChild(missing);
                         wrapper.appendChild(cb);
                         wrapper.style.background = '#fff3cd';
+                        wrapper.style.textAlign = "center";
                         cell.appendChild(wrapper);
                         row.appendChild(cell);
                         return;
                     }
 
                     const wrapper = document.createElement('div');
+                    wrapper.style.textAlign = "center";
 
                     const radio = document.createElement('input');
                     radio.type = 'radio';
