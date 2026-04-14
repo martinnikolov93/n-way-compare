@@ -132,7 +132,8 @@ function render() {
             const folderDiv = document.createElement('div');
             folderDiv.style.border = '1px solid #ccc';
             folderDiv.style.marginBottom = '4px';
-            folderDiv.style.marginLeft = (depth * 10) + 'px';
+            // folderDiv.style.marginLeft = (depth * 10) + 'px';
+            folderDiv.style.marginLeft = '10px';
 
             const header = document.createElement('div');
             header.style.display = 'grid';
@@ -203,7 +204,8 @@ function render() {
                 row.style.gridTemplateColumns = `300px repeat(${dirs.length}, 120px) 120px`;
                 row.style.borderBottom = '1px solid #ddd';
                 row.style.padding = '2px';
-                row.style.marginLeft = (depth * 10 + 10) + 'px';
+                // row.style.marginLeft = (depth * 10 + 10) + 'px';
+                row.style.marginLeft = '10px';
 
                 const nameDiv = document.createElement('div');
                 nameDiv.innerText = file.split(/\\|\//).pop();
@@ -274,6 +276,12 @@ function render() {
                 });
 
                 const actions = document.createElement('div');
+
+                // малко spacing между бутоните
+                actions.style.display = 'flex';
+                actions.style.gap = '6px';
+
+                // 🔍 DIFF
                 const diffBtn = document.createElement('button');
                 diffBtn.innerText = 'Diff';
                 diffBtn.onclick = () => {
@@ -281,11 +289,18 @@ function render() {
                     window.api.openDiffuse(files);
                 };
 
+                // 📋 COPY
                 const copyBtn = document.createElement('button');
                 copyBtn.innerText = 'Copy';
                 copyBtn.onclick = () => {
                     if (!selectedSource) return alert('Select source');
-                    const targets = checkboxes.filter(cb => cb.checked && cb.value !== selectedSource).map(cb => cb.value);
+
+                    const targets = checkboxes
+                        .filter(cb => cb.checked && cb.value !== selectedSource)
+                        .map(cb => cb.value);
+
+                    if (!targets.length) return alert('No targets selected');
+
                     window.api.copyFile({ src: selectedSource, targets })
                         .then(() => {
                             alert('Copied!');
@@ -294,8 +309,34 @@ function render() {
                         .catch(err => alert('Error: ' + err.message));
                 };
 
+                // ❌ DELETE (НОВО)
+                const deleteBtn = document.createElement('button');
+                deleteBtn.innerText = 'Delete';
+                deleteBtn.style.color = 'red';
+                deleteBtn.style.background = '#ffdddd';
+                deleteBtn.style.border = '1px solid red';
+
+                deleteBtn.onclick = () => {
+                    const targets = checkboxes
+                        .filter(cb => cb.checked)
+                        .map(cb => cb.value);
+
+                    if (!targets.length) return alert('No targets selected');
+
+                    if (!confirm(`Delete ${targets.length} file(s)?`)) return;
+
+                    Promise.all(targets.map(t => window.api.deleteFile(t)))
+                        .then(() => {
+                            alert('Deleted!');
+                            scan();
+                        })
+                        .catch(err => alert('Error: ' + err.message));
+                };
+
                 actions.appendChild(diffBtn);
                 actions.appendChild(copyBtn);
+                actions.appendChild(deleteBtn);
+
                 row.appendChild(actions);
                 content.appendChild(row);
             });
