@@ -107,12 +107,16 @@ function render() {
     list.innerHTML = '';
 
     const controls = document.createElement('div');
+
     const expandBtn = document.createElement('button');
     expandBtn.innerText = 'Expand All';
     const collapseBtn = document.createElement('button');
     collapseBtn.innerText = 'Collapse All';
+    const expandDiffBtn = document.createElement('button');
+    expandDiffBtn.innerText = 'Expand Diff';
 
     controls.appendChild(expandBtn);
+    controls.appendChild(expandDiffBtn);
     controls.appendChild(collapseBtn);
     list.appendChild(controls);
 
@@ -128,6 +132,27 @@ function render() {
         document.querySelectorAll('.folder-content').forEach(el => el.style.display = 'none');
         document.querySelectorAll('.folder-arrow').forEach(el => el.innerText = '▶ ');
         Object.keys(collapseState).forEach(k => collapseState[k] = false);
+    };
+
+    expandDiffBtn.onclick = () => {
+        const tree = groupFiles();
+
+        function apply(node, path = '') {
+            Object.entries(node).forEach(([name, data]) => {
+                const fullPath = path ? path + '/' + name : name;
+                const key = fullPath;
+
+                const hasDiff = nodeHasDiff(data);
+
+                collapseState[key] = hasDiff;
+
+                apply(data.__children, fullPath);
+            });
+        }
+
+        apply({ root: tree });
+
+        render();
     };
 
     function renderNode(node, path = '', depth = 0) {
@@ -265,6 +290,7 @@ function render() {
             // 📁 COPY
             const copyBtn = document.createElement('button');
             copyBtn.innerText = 'Copy';
+            copyBtn.style.cursor = 'pointer';
 
             copyBtn.onclick = () => {
                 if (!selectedSourceFolder) return alert('Select source folder');
@@ -287,6 +313,7 @@ function render() {
             const deleteBtn = document.createElement('button');
             deleteBtn.innerText = 'Delete';
             deleteBtn.style.color = 'red';
+            deleteBtn.style.cursor = 'pointer';
 
             deleteBtn.onclick = () => {
                 const targets = folderCheckboxes
@@ -446,8 +473,8 @@ function render() {
                 const deleteBtn = document.createElement('button');
                 deleteBtn.innerText = 'Delete';
                 deleteBtn.style.color = 'red';
-                deleteBtn.style.background = '#ffdddd';
-                deleteBtn.style.border = '1px solid red';
+                // deleteBtn.style.background = '#ffdddd';
+                // deleteBtn.style.border = '1px solid red';
                 deleteBtn.style.cursor = "pointer";
 
                 deleteBtn.onclick = () => {
