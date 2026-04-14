@@ -359,4 +359,30 @@ function render() {
 // 🔥 auto refresh при toggle
 document.getElementById('onlyDiff').onchange = render;
 
+async function loadConfig() {
+    try {
+        const data = await window.api.loadConfig();
+        if (!data) return;
+
+        if (!Array.isArray(data)) {
+            return alert('Invalid config format. Expected array.');
+        }
+
+        const foldersDiv = document.getElementById('folders');
+        foldersDiv.innerHTML = '';
+
+        data.forEach((path, i) => {
+            const input = document.createElement('input');
+            input.className = 'folder-input';
+            input.value = path;
+            input.placeholder = `Folder ${i + 1}`;
+            foldersDiv.appendChild(input);
+        });
+
+    } catch (err) {
+        alert('Error loading config: ' + err.message);
+    }
+}
+
+window.loadConfig = loadConfig;
 window.scan = scan;

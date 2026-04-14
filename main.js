@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -91,6 +91,25 @@ function scanDirs(baseDirs) {
 
     return map;
 }
+
+ipcMain.handle('load-config', async () => {
+    const result = await dialog.showOpenDialog({
+        properties: ['openFile'],
+        filters: [{ name: 'JSON', extensions: ['json'] }]
+    });
+
+    if (result.canceled) return null;
+
+    const filePath = result.filePaths[0];
+
+    try {
+        const content = fs.readFileSync(filePath, 'utf-8');
+        return JSON.parse(content);
+    } catch (err) {
+        console.error('Config load error:', err);
+        throw err;
+    }
+});
 
 ipcMain.handle('scan', async (e, dirs) => scanDirs(dirs));
 
