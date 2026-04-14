@@ -134,6 +134,7 @@ function render() {
             folderDiv.style.marginBottom = '4px';
             // folderDiv.style.marginLeft = (depth * 10) + 'px';
             folderDiv.style.marginLeft = '10px';
+            folderDiv.style.width = "max-content";
 
             const header = document.createElement('div');
             header.style.display = 'grid';
@@ -248,24 +249,24 @@ function render() {
                     cb.value = entry.path;
                     checkboxes.push(cb);
 
-                    const delBtn = document.createElement('span');
-                    delBtn.innerText = '❌';
-                    delBtn.style.cursor = 'pointer';
-                    delBtn.style.marginLeft = '4px';
-                    delBtn.title = 'Delete this file from this folder';
-                    delBtn.onclick = () => {
-                        if (!confirm('Delete this file?')) return;
-                        window.api.deleteFile(entry.path)
-                            .then(() => {
-                                alert('Deleted!');
-                                scan();
-                            })
-                            .catch(err => alert('Error: ' + err.message));
-                    };
+                    // const delBtn = document.createElement('span');
+                    // delBtn.innerText = '❌';
+                    // delBtn.style.cursor = 'pointer';
+                    // delBtn.style.marginLeft = '4px';
+                    // delBtn.title = 'Delete this file from this folder';
+                    // delBtn.onclick = () => {
+                    //     if (!confirm('Delete this file?')) return;
+                    //     window.api.deleteFile(entry.path)
+                    //         .then(() => {
+                    //             alert('Deleted!');
+                    //             scan();
+                    //         })
+                    //         .catch(err => alert('Error: ' + err.message));
+                    // };
 
                     wrapper.appendChild(radio);
                     wrapper.appendChild(cb);
-                    wrapper.appendChild(delBtn);
+                    // wrapper.appendChild(delBtn);
 
                     if (unique.size > 1 && entry.hash !== hashes[0]) {
                         wrapper.style.background = '#ffdddd';
@@ -284,6 +285,7 @@ function render() {
                 // 🔍 DIFF
                 const diffBtn = document.createElement('button');
                 diffBtn.innerText = 'Diff';
+                diffBtn.style.cursor = "pointer";
                 diffBtn.onclick = () => {
                     const files = Object.values(entries).filter(Boolean).map(e => e.path);
                     window.api.openDiffuse(files);
@@ -292,6 +294,7 @@ function render() {
                 // 📋 COPY
                 const copyBtn = document.createElement('button');
                 copyBtn.innerText = 'Copy';
+                copyBtn.style.cursor = "pointer";
                 copyBtn.onclick = () => {
                     if (!selectedSource) return alert('Select source');
 
@@ -309,12 +312,12 @@ function render() {
                         .catch(err => alert('Error: ' + err.message));
                 };
 
-                // ❌ DELETE (НОВО)
                 const deleteBtn = document.createElement('button');
                 deleteBtn.innerText = 'Delete';
                 deleteBtn.style.color = 'red';
                 deleteBtn.style.background = '#ffdddd';
                 deleteBtn.style.border = '1px solid red';
+                deleteBtn.style.cursor = "pointer";
 
                 deleteBtn.onclick = () => {
                     const targets = checkboxes
