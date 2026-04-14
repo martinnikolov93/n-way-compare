@@ -159,7 +159,13 @@ function render() {
             arrow.innerText = expanded ? '▼ ' : '▶ ';
 
             const title = document.createElement('span');
-            title.innerText = isRoot ? '📁 root' : '📁 ' + name;
+            // title.innerText = isRoot ? '📁 root' : '📁 ' + name;
+            // 🔥 emoji според diff
+            const statusIcon = hasDiff ? '❌' : '✅';
+
+            title.innerText = isRoot
+                ? `${statusIcon} 📁 root`
+                : `${statusIcon} 📁 ${name}`;
 
             const nameCol = document.createElement('div');
             nameCol.appendChild(arrow);
