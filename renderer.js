@@ -11,22 +11,29 @@ function arraysEqual(a, b) {
 }
 
 async function scan(resetCache = false) {
-    const inputs = document.querySelectorAll('.folder-input');
-    dirs = Array.from(inputs).map(i => i.value.trim()).filter(Boolean);
+    const loader = document.getElementById('scanLoader');
+    loader.style.display = 'inline';
 
-    if (dirs.length < 2) return alert('Please enter at least 2 folders');
+    try {
+        const inputs = document.querySelectorAll('.folder-input');
+        dirs = Array.from(inputs).map(i => i.value.trim()).filter(Boolean);
 
-    if (resetCache) {
-        for (let k in collapseState) delete collapseState[k];
-    }
+        if (dirs.length < 2) {
+            loader.style.display = 'none';
+            return alert('Please enter at least 2 folders');
+        }
 
-    currentData = await window.api.scan(dirs);
-    render();
+        if (resetCache) {
+            for (let k in collapseState) delete collapseState[k];
+        }
 
-    // 🔥 само ако има промяна
-    if (!arraysEqual(dirs, lastWatchedDirs)) {
-        window.api.watchFolders(dirs);
-        lastWatchedDirs = [...dirs];
+        currentData = await window.api.scan(dirs);
+        render();
+
+    } catch (err) {
+        alert('Scan error: ' + err.message);
+    } finally {
+        loader.style.display = 'none';
     }
 }
 
