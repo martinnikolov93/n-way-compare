@@ -224,7 +224,8 @@ function render() {
             dirs.forEach((dir, idx) => {
                 const col = document.createElement('div');
                 const wrapper = document.createElement('div');
-                wrapper.style.padding = '0 6px';
+                // wrapper.style.padding = '0 6px';
+                wrapper.style.marginLeft = '15px';
                 wrapper.style.minWidth = '80px';
                 wrapper.style.textAlign = 'center';
 
