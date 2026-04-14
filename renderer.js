@@ -413,6 +413,23 @@ async function saveConfig() {
     }
 }
 
+async function runCmd() {
+    const input = document.getElementById('cmdInput');
+    const command = input.value.trim();
+
+    if (!command) return alert('Enter command');
+
+    if (!dirs.length) return alert('No folders');
+
+    try {
+        await window.api.runCommand({ dirs, command });
+        alert('Command executed!');
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+window.runCmd = runCmd;
 window.saveConfig = saveConfig;
 window.loadConfig = loadConfig;
 window.scan = scan;

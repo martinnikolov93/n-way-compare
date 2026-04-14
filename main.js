@@ -129,6 +129,27 @@ ipcMain.handle('save-config', async (e, data) => {
     }
 });
 
+ipcMain.handle('run-command', async (e, { dirs, command }) => {
+    const { spawn } = require('child_process');
+
+    try {
+        dirs.forEach(dir => {
+            // стартира cmd в тази папка
+            spawn('cmd.exe', ['/c', command], {
+                cwd: dir,
+                detached: true,
+                stdio: 'ignore',
+                shell: true
+            });
+        });
+
+        return { success: true };
+    } catch (err) {
+        console.error('CMD error:', err);
+        throw err;
+    }
+});
+
 ipcMain.handle('scan', async (e, dirs) => scanDirs(dirs));
 
 ipcMain.handle('open-diffuse', async (e, files) => {

@@ -1,24 +1,43 @@
 <!DOCTYPE html>
 <html>
+
 <head>
   <meta charset="UTF-8">
   <title>N-Way Sync</title>
   <style>
-    #folders { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
-    .folder-input { width: 500px; }
+    #folders {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-bottom: 8px;
+    }
+
+    .folder-input {
+      width: 500px;
+    }
   </style>
 </head>
+
 <body>
   <h2>N-Way Folder Compare Tool</h2>
   <div id="folders">
     <input class="folder-input" placeholder="Folder 1 Source" />
     <input class="folder-input" placeholder="Folder 2" />
   </div>
-  <button id="addFolderBtn">Add Folder</button>
-  <button onclick="loadConfig()">Load Config</button>
-  <button onclick="saveConfig()">Save Config</button>
-  <button onclick="scan()">Scan</button>
-  <label><input type="checkbox" id="onlyDiff" /> Show only different</label>
+  <div>
+    <button id="addFolderBtn">Add Folder</button>
+    <button onclick="loadConfig()">Load Config</button>
+    <button onclick="saveConfig()">Save Config</button>
+    <button onclick="scan()">Scan</button>
+    <label><input type="checkbox" id="onlyDiff" /> Show only different</label>
+  </div>
+  <div style="margin-top:10px;">
+    <input id="cmdInput" placeholder="Enter CMD command" style="width:400px;" />
+    <button onclick="runCmd()">Run CMD</button>
+  </div>
+
+
+
 
   <!-- Legend / Header -->
   <div style="margin:10px 0; padding:8px; border:1px solid #ccc; background:#f9f9f9;">
@@ -27,21 +46,19 @@
       🔘 <b>Source</b> (radio) → choose which version to copy FROM
     </div>
     <div>
-      ☑️ <b>Apply to</b> (checkbox) → choose which targets to copy TO
+      ☑️ <b>Apply to</b> (checkbox) → choose which targets to apply action ( Copy, Delete ) TO
     </div>
     <div>
-      🔴 Red row/cell → file differs between folders
+      🔴 Red row/cell → file differs between source and target
     </div>
     <div>
       ❓ <b>Missing file</b> → file does not exist (can copy here)
     </div>
-    <div>
-      ❌ <b>Delete</b> → remove file from this folder
-    </div>
   </div>
 
   <!-- Table Header -->
-  <div id="tableHeader" style="display:grid; grid-template-columns:300px repeat(10,120px) 120px; font-weight:bold; border-bottom:2px solid black; padding:4px;">
+  <div id="tableHeader"
+    style="display:grid; grid-template-columns:300px repeat(10,120px) 120px; font-weight:bold; border-bottom:2px solid black; padding:4px;">
     <div>File</div>
     <!-- dynamic columns inserted by JS -->
     <div id="headerCols"></div>
@@ -63,4 +80,5 @@
     });
   </script>
 </body>
+
 </html>

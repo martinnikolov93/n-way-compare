@@ -9,4 +9,5 @@ contextBridge.exposeInMainWorld('api', {
     watchFolders: (dirs) => ipcRenderer.invoke('watch-folders', dirs),
     loadConfig: () => ipcRenderer.invoke('load-config'),
     saveConfig: (data) => ipcRenderer.invoke('save-config', data),
+    runCommand: (data) => ipcRenderer.invoke('run-command', data),
 });
