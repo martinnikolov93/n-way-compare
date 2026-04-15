@@ -76,6 +76,12 @@ function scanDirs(baseDirs) {
                 const relative = path.join(rel, entry.name);
 
                 if (entry.isDirectory()) {
+                    if (!map[relative]) map[relative] = {};
+                    map[relative][idx] = {
+                        path: full,
+                        isDir: true
+                    };
+
                     walk(full, relative);
                 } else {
                     if (!map[relative]) map[relative] = {};

@@ -10,13 +10,17 @@ function arraysEqual(a, b) {
     return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
+function getDirs() {
+    const inputs = document.querySelectorAll('.folder-input');
+    return Array.from(inputs).map(i => i.value.trim()).filter(Boolean);
+}
+
 async function scan(resetCache = false) {
     const loader = document.getElementById('scanLoader');
     loader.style.display = 'inline';
 
     try {
-        const inputs = document.querySelectorAll('.folder-input');
-        dirs = Array.from(inputs).map(i => i.value.trim()).filter(Boolean);
+        dirs = this.getDirs();
 
         if (dirs.length < 2) {
             loader.style.display = 'none';
@@ -29,6 +33,12 @@ async function scan(resetCache = false) {
 
         currentData = await window.api.scan(dirs);
         render();
+
+        // 🔥 само ако има промяна
+        if (!arraysEqual(dirs, lastWatchedDirs)) {
+            window.api.watchFolders(dirs);
+            lastWatchedDirs = [...dirs];
+        }
 
     } catch (err) {
         alert('Scan error: ' + err.message);
@@ -569,6 +579,8 @@ async function runCmd() {
     const command = input.value.trim();
 
     if (!command) return alert('Enter command');
+
+    dirs = this.getDirs();
 
     if (!dirs.length) return alert('No folders');
 
