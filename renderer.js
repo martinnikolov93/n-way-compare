@@ -220,6 +220,7 @@ function render() {
             folderDiv.style.width = "max-content";
 
             const header = document.createElement('div');
+            header.className = 'compare-row folder-header-row';
             header.style.display = 'grid';
             header.style.gridTemplateColumns = `300px repeat(${dirs.length}, 135px) 135px`;
             // header.style.cursor = 'pointer';
@@ -404,6 +405,7 @@ function render() {
                 if (onlyDiff && unique.size <= 1) return;
 
                 const row = document.createElement('div');
+                row.className = 'compare-row';
                 row.style.display = 'grid';
                 row.style.gridTemplateColumns = `300px repeat(${dirs.length}, 135px) 135px`;
                 row.style.borderBottom = '1px solid #ddd';
