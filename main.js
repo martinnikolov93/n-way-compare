@@ -172,6 +172,52 @@ ipcMain.handle('open-diffuse', async (e, files) => {
 
 });
 
+ipcMain.handle('read-files', async (e, filePaths) => {
+    return filePaths.map(filePath => {
+        try {
+            if (!filePath || !fs.existsSync(filePath)) {
+                return {
+                    path: filePath,
+                    exists: false,
+                    content: ''
+                };
+            }
+
+            return {
+                path: filePath,
+                exists: true,
+                content: fs.readFileSync(filePath, 'utf8')
+            };
+        } catch (err) {
+            return {
+                path: filePath,
+                exists: false,
+                content: '',
+                error: err.message
+            };
+        }
+    });
+});
+
+ipcMain.handle('write-file', async (e, { path: filePath, content }) => {
+    try {
+        const dirPath = path.dirname(filePath);
+        if (!fs.existsSync(dirPath)) {
+            fs.mkdirSync(dirPath, { recursive: true });
+        }
+
+        fs.writeFileSync(filePath, content, 'utf8');
+
+        return {
+            success: true,
+            path: filePath
+        };
+    } catch (err) {
+        console.error('Write error:', err);
+        throw err;
+    }
+});
+
 ipcMain.handle('copy-file', async (e, { src, targets }) => {
     const fs = require('fs');
     const path = require('path');

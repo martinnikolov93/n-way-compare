@@ -139,6 +139,10 @@ function getFolderName(fullPath) {
     return fullPath.split(/\\|\//).filter(Boolean).pop();
 }
 
+function buildFileTargetPath(dir, relativePath) {
+    return dir.replace(/[\\/]+$/, '') + '/' + relativePath.replace(/^[\\/]+/, '');
+}
+
 function folderExistsInDir(dirIndex, node) {
     if (!node.__relativePath) return true;
     if (node.__entryKey && currentData[node.__entryKey]?.[dirIndex]?.isDir) return true;
@@ -490,12 +494,35 @@ function render() {
                 actions.style.gap = '6px';
 
                 // 🔍 DIFF
-                const diffBtn = document.createElement('button');
-                diffBtn.innerText = 'Diff';
-                diffBtn.style.cursor = "pointer";
-                diffBtn.onclick = () => {
+                const diffuseBtn = document.createElement('button');
+                diffuseBtn.innerText = 'Diffuse';
+                diffuseBtn.style.cursor = "pointer";
+                diffuseBtn.onclick = () => {
                     const files = Object.values(entries).filter(Boolean).map(e => e.path);
                     window.api.openDiffuse(files);
+                };
+
+                const differenceBtn = document.createElement('button');
+                differenceBtn.innerText = 'Difference';
+                differenceBtn.style.cursor = "pointer";
+                differenceBtn.onclick = async () => {
+                    if (!window.differenceViewer) {
+                        alert('Difference viewer is not available.');
+                        return;
+                    }
+
+                    try {
+                        await window.differenceViewer.openComparison({
+                            title: file.split(/\\|\//).pop(),
+                            relativePath: file,
+                            panes: dirs.map((dir, idx) => ({
+                                label: getFolderName(dir),
+                                path: entries[idx]?.path || buildFileTargetPath(dir, file)
+                            }))
+                        });
+                    } catch (err) {
+                        alert('Difference error: ' + err.message);
+                    }
                 };
 
                 // 📋 COPY
@@ -543,7 +570,8 @@ function render() {
                         .catch(err => alert('Error: ' + err.message));
                 };
 
-                actions.appendChild(diffBtn);
+                actions.appendChild(diffuseBtn);
+                actions.appendChild(differenceBtn);
                 actions.appendChild(copyBtn);
                 actions.appendChild(deleteBtn);
 
