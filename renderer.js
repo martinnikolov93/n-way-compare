@@ -56,31 +56,59 @@ window.api.onFolderChange(() => {
 function groupFiles() {
     const root = {
         name: 'root',
+        __entryKey: '',
+        __relativePath: '',
         __files: [],
         __children: {}
     };
 
-    Object.keys(currentData)
-        .sort((a, b) => a.localeCompare(b))
-        .forEach(file => {
-            const parts = file.split(/\\|\//);
-            let node = root;
+    function ensureFolderNode(parts, entryKey = null) {
+        let node = root;
+        let relativePath = '';
 
-            for (let i = 0; i < parts.length - 1; i++) {
-                const part = parts[i];
+        parts.forEach(part => {
+            relativePath = relativePath ? relativePath + '/' + part : part;
 
-                if (!node.__children[part]) {
-                    node.__children[part] = {
-                        name: part,
-                        __files: [],
-                        __children: {}
-                    };
-                }
-
-                node = node.__children[part];
+            if (!node.__children[part]) {
+                node.__children[part] = {
+                    name: part,
+                    __entryKey: null,
+                    __relativePath: relativePath,
+                    __files: [],
+                    __children: {}
+                };
             }
 
-            node.__files.push(file);
+            node = node.__children[part];
+        });
+
+        if (entryKey !== null) {
+            node.__entryKey = entryKey;
+        }
+
+        return node;
+    }
+
+    Object.keys(currentData)
+        .sort((a, b) => a.localeCompare(b))
+        .forEach(entryPath => {
+            const entries = currentData[entryPath];
+            const existingEntries = Object.values(entries).filter(Boolean);
+            const parts = entryPath.split(/\\|\//).filter(Boolean);
+
+            if (!parts.length || !existingEntries.length) {
+                return;
+            }
+
+            const isDirectory = existingEntries.every(entry => entry.isDir);
+
+            if (isDirectory) {
+                ensureFolderNode(parts, entryPath);
+                return;
+            }
+
+            const parentNode = ensureFolderNode(parts.slice(0, -1));
+            parentNode.__files.push(entryPath);
         });
 
     return root;
@@ -88,6 +116,11 @@ function groupFiles() {
 
 // 🔥 recursive diff check
 function nodeHasDiff(node) {
+    if (node.__entryKey) {
+        const folderPresence = dirs.map((_, i) => Boolean(currentData[node.__entryKey]?.[i]?.isDir));
+        if (new Set(folderPresence).size > 1) return true;
+    }
+
     for (const file of node.__files) {
         const entries = currentData[file];
         const hashes = dirs.map((_, i) => entries[i]?.hash || '__MISSING__');
@@ -107,6 +140,9 @@ function getFolderName(fullPath) {
 }
 
 function folderExistsInDir(dirIndex, node) {
+    if (!node.__relativePath) return true;
+    if (node.__entryKey && currentData[node.__entryKey]?.[dirIndex]?.isDir) return true;
+
     return node.__files.some(file => currentData[file]?.[dirIndex]) ||
         Object.values(node.__children).some(child => folderExistsInDir(dirIndex, child));
 }
