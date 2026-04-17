@@ -229,12 +229,13 @@
             return button;
         }
 
-        setSelection(tab, paneIndex, startRow, endRow, anchorRow = startRow) {
+        setSelection(tab, paneIndex, startRow, endRow, anchorRow = startRow, activeRow = endRow) {
             tab.selection = {
                 paneIndex,
                 startRow: Math.min(startRow, endRow),
                 endRow: Math.max(startRow, endRow),
-                anchorRow
+                anchorRow,
+                activeRow
             };
         }
 
@@ -998,14 +999,16 @@
                     paneIndex,
                     startRow: Math.min(anchor, rowIndex),
                     endRow: Math.max(anchor, rowIndex),
-                    anchorRow: anchor
+                    anchorRow: anchor,
+                    activeRow: rowIndex
                 };
             } else {
                 tab.selection = {
                     paneIndex,
                     startRow: rowIndex,
                     endRow: rowIndex,
-                    anchorRow: rowIndex
+                    anchorRow: rowIndex,
+                    activeRow: rowIndex
                 };
             }
 
@@ -1066,7 +1069,8 @@
                     paneIndex,
                     startRow: nextStart,
                     endRow: nextEnd,
-                    anchorRow: nextStart
+                    anchorRow: nextStart,
+                    activeRow: nextEnd
                 };
             } else {
                 tab.selection = null;
@@ -1187,7 +1191,8 @@
                 paneIndex,
                 startRow: hunk.start,
                 endRow: hunk.end,
-                anchorRow: hunk.start
+                anchorRow: hunk.start,
+                activeRow: hunk.end
             };
 
             this.render();
@@ -1258,7 +1263,7 @@
             this.render();
         }
 
-        moveSelectionRow(direction) {
+        moveSelectionRow(direction, extendSelection = false) {
             const tab = this.getActiveTab();
             if (!tab || !tab.rows.length) {
                 return;
@@ -1268,6 +1273,17 @@
             let targetRow = 0;
 
             if (tab.selection && tab.selection.paneIndex === paneIndex) {
+                if (extendSelection) {
+                    const anchorRow = tab.selection.anchorRow ?? tab.selection.startRow;
+                    const activeRow = tab.selection.activeRow ?? tab.selection.endRow;
+                    targetRow = activeRow + direction;
+                    targetRow = clamp(targetRow, 0, tab.rows.length - 1);
+                    this.setSelection(tab, paneIndex, anchorRow, targetRow, anchorRow, targetRow);
+                    this.refreshSelectionVisuals();
+                    this.scrollToRow(targetRow);
+                    return;
+                }
+
                 targetRow = direction > 0
                     ? tab.selection.endRow + 1
                     : tab.selection.startRow - 1;
@@ -1276,7 +1292,7 @@
             }
 
             targetRow = clamp(targetRow, 0, tab.rows.length - 1);
-            this.setSelection(tab, paneIndex, targetRow, targetRow, targetRow);
+            this.setSelection(tab, paneIndex, targetRow, targetRow, targetRow, targetRow);
             this.refreshSelectionVisuals();
             this.scrollToRow(targetRow);
         }
@@ -1292,7 +1308,23 @@
                 return;
             }
 
-            if (!event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey) {
+            if (!event.ctrlKey && !event.altKey && !event.metaKey) {
+                if (event.shiftKey && event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    this.moveSelectionRow(-1, true);
+                    return;
+                }
+
+                if (event.shiftKey && event.key === 'ArrowDown') {
+                    event.preventDefault();
+                    this.moveSelectionRow(1, true);
+                    return;
+                }
+
+                if (event.shiftKey) {
+                    return;
+                }
+
                 if (event.key === 'ArrowLeft') {
                     event.preventDefault();
                     if (!this.moveFocusPane(-1)) {

@@ -384,20 +384,12 @@
 
 .difference-row {
   display: grid;
-  gap: 3px;
+  gap: 0;
   align-items: stretch;
 }
 
 .difference-row + .difference-row {
-  margin-top: 1px;
-}
-
-.difference-row.is-change-start .difference-cell {
-  box-shadow: inset 0 2px 0 var(--diff-hunk);
-}
-
-.difference-row.is-changed .difference-cell {
-  border-top-color: #848484;
+  margin-top: 0;
 }
 
 .difference-cell {
@@ -406,14 +398,17 @@
   min-width: 360px;
   min-height: 20px;
   box-sizing: border-box;
-  border: 1px solid #ababab;
+  border-left: 1px solid #ababab;
+  border-right: 1px solid #ababab;
+  border-top: 0;
+  border-bottom: 0;
   border-radius: 0;
   overflow: hidden;
   background: var(--diff-panel);
 }
 
 .difference-cell.is-diff-row {
-  background: linear-gradient(180deg, #fffaf6 0%, #fff1e8 100%);
+  background: linear-gradient(180deg, #ffe2de 0%, #ffcfc8 100%);
 }
 
 .difference-cell.is-active-pane {
@@ -431,22 +426,15 @@
 }
 
 .difference-cell.is-changed-left {
-  background:
-    linear-gradient(90deg, rgba(255, 143, 117, 0.95) 0, rgba(255, 205, 191, 0.92) 20px, rgba(255, 239, 232, 0.92) 20px),
-    linear-gradient(180deg, #fff4ef 0%, #ffe7de 100%);
+  background: linear-gradient(180deg, #ffd9d2 0%, #ffbdb4 100%);
 }
 
 .difference-cell.is-changed-right {
-  background:
-    linear-gradient(270deg, rgba(88, 156, 255, 0.95) 0, rgba(191, 221, 255, 0.9) 20px, rgba(234, 244, 255, 0.92) 20px),
-    linear-gradient(180deg, #f3f8ff 0%, #e1eeff 100%);
+  background: linear-gradient(180deg, #ffd9d2 0%, #ffbdb4 100%);
 }
 
 .difference-cell.is-changed-left.is-changed-right {
-  background:
-    linear-gradient(90deg, rgba(255, 143, 117, 0.95) 0, rgba(255, 205, 191, 0.92) 20px, transparent 20px),
-    linear-gradient(270deg, rgba(88, 156, 255, 0.95) 0, rgba(191, 221, 255, 0.9) 20px, transparent 20px),
-    linear-gradient(180deg, #fff8f4 0%, #edf5ff 100%);
+  background: linear-gradient(180deg, #ffd4cc 0%, #ffb3a8 100%);
 }
 
 .difference-cell.is-missing {
