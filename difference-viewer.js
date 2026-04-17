@@ -1,6 +1,7 @@
 (function () {
     const STORAGE_KEY = 'difference-viewer.tabs.v1';
     const ACTIVE_KEY = 'difference-viewer.active-key.v1';
+    const LINE_GUTTER_WIDTH = 38;
 
     function basename(filePath) {
         if (!filePath) return 'Untitled';
@@ -55,10 +56,16 @@
             this.tabs = [];
             this.activeTabId = null;
             this.savedTabsRestored = false;
+            this.paneMinWidth = 500;
+            this.paneMaxWidth = 500;
             this.isSyncingTabScroll = false;
             this.rowElements = [];
             this.cellElements = [];
             this.headerElements = [];
+            this.codeScrollerElements = [];
+            this.codeContentElements = [];
+            this.paneScrollbarElements = [];
+            this.paneScrollbarSpacerElements = [];
             this.gridScroll = null;
             this.dragSelection = null;
             this.lastStatus = 'Open a file from the Difference button to compare and merge changes.';
@@ -174,8 +181,21 @@
             transferGroup.appendChild(this.mergeLeftRightBtn);
             transferGroup.appendChild(this.mergeRightLeftBtn);
 
+            const layoutGroup = document.createElement('div');
+            layoutGroup.className = 'difference-toolbar-group';
+            layoutGroup.appendChild(this.createToolbarLabel('Layout'));
+            this.minWidthInput = this.createToolbarNumberInput('Min width', this.paneMinWidth, (value) => {
+                this.applyPaneWidthChange('min', value);
+            });
+            this.maxWidthInput = this.createToolbarNumberInput('Max width', this.paneMaxWidth, (value) => {
+                this.applyPaneWidthChange('max', value);
+            });
+            layoutGroup.appendChild(this.minWidthInput.wrapper);
+            layoutGroup.appendChild(this.maxWidthInput.wrapper);
+
             toolbar.appendChild(navigationGroup);
             toolbar.appendChild(transferGroup);
+            toolbar.appendChild(layoutGroup);
 
             this.statusbarEl = document.createElement('div');
             this.statusbarEl.className = 'difference-statusbar';
@@ -229,6 +249,80 @@
             return button;
         }
 
+        createToolbarNumberInput(label, value, onCommit) {
+            const wrapper = document.createElement('label');
+            wrapper.className = 'difference-toolbar-input';
+
+            const labelEl = document.createElement('span');
+            labelEl.className = 'difference-toolbar-input-label';
+            labelEl.textContent = label;
+
+            const input = document.createElement('input');
+            input.type = 'number';
+            input.min = '120';
+            input.step = '10';
+            input.value = String(value);
+            input.className = 'difference-toolbar-number';
+
+            const commit = () => {
+                const parsed = Number.parseInt(input.value, 10);
+                onCommit(Number.isFinite(parsed) ? parsed : value);
+                input.value = String(label === 'Min width' ? this.paneMinWidth : this.paneMaxWidth);
+            };
+
+            input.addEventListener('change', commit);
+            input.addEventListener('blur', commit);
+            input.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    commit();
+                }
+            });
+
+            wrapper.appendChild(labelEl);
+            wrapper.appendChild(input);
+
+            return { wrapper, input };
+        }
+
+        applyPaneWidthChange(kind, value) {
+            const normalized = Math.max(120, Number.isFinite(value) ? value : 500);
+
+            if (kind === 'min') {
+                this.paneMinWidth = normalized;
+                if (this.paneMaxWidth < this.paneMinWidth) {
+                    this.paneMaxWidth = this.paneMinWidth;
+                }
+            } else {
+                this.paneMaxWidth = normalized;
+                if (this.paneMinWidth > this.paneMaxWidth) {
+                    this.paneMinWidth = this.paneMaxWidth;
+                }
+            }
+
+            if (this.minWidthInput?.input) {
+                this.minWidthInput.input.value = String(this.paneMinWidth);
+            }
+
+            if (this.maxWidthInput?.input) {
+                this.maxWidthInput.input.value = String(this.paneMaxWidth);
+            }
+
+            if (this.getActiveTab()) {
+                this.render();
+            }
+        }
+
+        getPaneTemplateColumns(tab) {
+            const minWidth = this.paneMinWidth;
+            const maxWidth = this.paneMaxWidth;
+            const track = minWidth === maxWidth
+                ? `${minWidth}px`
+                : `minmax(${minWidth}px, ${maxWidth}px)`;
+
+            return `repeat(${tab.panes.length}, ${track})`;
+        }
+
         setSelection(tab, paneIndex, startRow, endRow, anchorRow = startRow, activeRow = endRow) {
             tab.selection = {
                 paneIndex,
@@ -237,6 +331,12 @@
                 anchorRow,
                 activeRow
             };
+        }
+
+        ensurePaneScrollState(tab) {
+            if (!Array.isArray(tab.paneScrollLefts) || tab.paneScrollLefts.length !== tab.panes.length) {
+                tab.paneScrollLefts = Array.from({ length: tab.panes.length }, (_, paneIndex) => tab.paneScrollLefts?.[paneIndex] || 0);
+            }
         }
 
         refreshSelectionVisuals() {
@@ -781,6 +881,10 @@
             this.rowElements = [];
             this.cellElements = [];
             this.headerElements = [];
+            this.codeScrollerElements = [];
+            this.codeContentElements = [];
+            this.paneScrollbarElements = [];
+            this.paneScrollbarSpacerElements = [];
 
             if (!tab) {
                 this.headerTitleEl.textContent = 'Difference';
@@ -795,11 +899,12 @@
 
             this.headerTitleEl.textContent = tab.title;
             this.headerSubtitleEl.textContent = tab.relativePath;
+            this.ensurePaneScrollState(tab);
 
             const compare = document.createElement('div');
             compare.className = 'difference-compare';
 
-            const templateColumns = 'repeat(' + tab.panes.length + ', minmax(360px, 1fr))';
+            const templateColumns = this.getPaneTemplateColumns(tab);
 
             const gridScroll = document.createElement('div');
             gridScroll.className = 'difference-grid-scroll';
@@ -814,6 +919,8 @@
             tab.panes.forEach((pane, paneIndex) => {
                 const header = document.createElement('div');
                 header.className = 'difference-pane-header' + (paneIndex === tab.focusPaneIndex ? ' is-active' : '');
+                header.style.minWidth = this.paneMinWidth + 'px';
+                header.style.maxWidth = this.paneMaxWidth + 'px';
 
                 const labelRow = document.createElement('div');
                 labelRow.className = 'difference-pane-label-row';
@@ -882,6 +989,8 @@
                         cellEl.className = 'difference-cell';
                         cellEl.dataset.rowIndex = String(rowIndex);
                         cellEl.dataset.paneIndex = String(paneIndex);
+                        cellEl.style.minWidth = this.paneMinWidth + 'px';
+                        cellEl.style.maxWidth = this.paneMaxWidth + 'px';
 
                         if (paneIndex === tab.focusPaneIndex) {
                             cellEl.classList.add('is-active-pane');
@@ -911,16 +1020,27 @@
                         gutter.className = 'difference-gutter';
                         gutter.textContent = cell.lineNumber == null ? '' : String(cell.lineNumber);
 
+                        const codeScroller = document.createElement('div');
+                        codeScroller.className = 'difference-code-scroll';
+
                         const code = document.createElement('div');
                         code.className = 'difference-code' + (cell.missing ? ' is-placeholder' : '');
                         code.innerHTML = this.renderCodeMarkup(row, paneIndex);
 
                         cellEl.appendChild(gutter);
-                        cellEl.appendChild(code);
+                        codeScroller.appendChild(code);
+                        cellEl.appendChild(codeScroller);
                         cellEl.addEventListener('mousedown', (event) => this.handleCellMouseDown(paneIndex, rowIndex, event));
-
                         rowEl.appendChild(cellEl);
                         this.cellElements[rowIndex][paneIndex] = cellEl;
+                        if (!this.codeScrollerElements[paneIndex]) {
+                            this.codeScrollerElements[paneIndex] = [];
+                        }
+                        this.codeScrollerElements[paneIndex].push(codeScroller);
+                        if (!this.codeContentElements[paneIndex]) {
+                            this.codeContentElements[paneIndex] = [];
+                        }
+                        this.codeContentElements[paneIndex].push(code);
                     });
 
                     grid.appendChild(rowEl);
@@ -931,6 +1051,32 @@
                 filler.className = 'difference-row-filler';
                 filler.style.marginTop = '0';
                 grid.appendChild(filler);
+
+                const scrollbarRow = document.createElement('div');
+                scrollbarRow.className = 'difference-pane-scrollbars';
+                scrollbarRow.style.gridTemplateColumns = templateColumns;
+
+                tab.panes.forEach((_, paneIndex) => {
+                    const scrollbarCell = document.createElement('div');
+                    scrollbarCell.className = 'difference-pane-scrollbar-cell';
+                    scrollbarCell.style.minWidth = this.paneMinWidth + 'px';
+                    scrollbarCell.style.maxWidth = this.paneMaxWidth + 'px';
+
+                    const scrollbar = document.createElement('div');
+                    scrollbar.className = 'difference-pane-scrollbar';
+                    scrollbar.addEventListener('scroll', () => this.syncPaneScroll(paneIndex, scrollbar.scrollLeft, scrollbar));
+
+                    const spacer = document.createElement('div');
+                    spacer.className = 'difference-pane-scrollbar-spacer';
+
+                    scrollbar.appendChild(spacer);
+                    scrollbarCell.appendChild(scrollbar);
+                    scrollbarRow.appendChild(scrollbarCell);
+                    this.paneScrollbarElements[paneIndex] = scrollbar;
+                    this.paneScrollbarSpacerElements[paneIndex] = spacer;
+                });
+
+                grid.appendChild(scrollbarRow);
             }
 
             gridScroll.appendChild(grid);
@@ -943,10 +1089,73 @@
                     this.gridScroll.scrollTop = previousTop;
                     this.gridScroll.scrollLeft = previousLeft;
                 }
+                this.refreshPaneScrollbarMetrics(tab);
+                this.restorePaneScrollPositions(tab);
             });
 
             this.updateStatusForTab(tab);
             this.refreshSelectionVisuals();
+        }
+
+        refreshPaneScrollbarMetrics(tab) {
+            this.ensurePaneScrollState(tab);
+            const globalMaxScrollWidth = Math.max(
+                0,
+                ...this.codeContentElements.flatMap((codes) => (codes || []).map((code) => code.scrollWidth))
+            );
+
+            this.codeContentElements.forEach((codes) => {
+                (codes || []).forEach((code) => {
+                    code.style.width = globalMaxScrollWidth > 0 ? globalMaxScrollWidth + 'px' : '';
+                });
+            });
+
+            this.paneScrollbarSpacerElements.forEach((spacer) => {
+                if (spacer) {
+                    spacer.style.width = (globalMaxScrollWidth + LINE_GUTTER_WIDTH) + 'px';
+                }
+            });
+        }
+
+        restorePaneScrollPositions(tab) {
+            this.ensurePaneScrollState(tab);
+            this.codeScrollerElements.forEach((scrollers, paneIndex) => {
+                const targetScrollLeft = tab.paneScrollLefts[paneIndex] || 0;
+                (scrollers || []).forEach((scroller) => {
+                    if (scroller.scrollLeft !== targetScrollLeft) {
+                        scroller.scrollLeft = targetScrollLeft;
+                    }
+                });
+
+                const paneScrollbar = this.paneScrollbarElements[paneIndex];
+                if (paneScrollbar && paneScrollbar.scrollLeft !== targetScrollLeft) {
+                    paneScrollbar.scrollLeft = targetScrollLeft;
+                }
+            });
+        }
+
+        syncPaneScroll(paneIndex, nextScrollLeft, sourceScroller = null) {
+            const tab = this.getActiveTab();
+            if (!tab) {
+                return;
+            }
+
+            this.ensurePaneScrollState(tab);
+            tab.paneScrollLefts = Array.from({ length: tab.panes.length }, () => nextScrollLeft);
+
+            this.codeScrollerElements.forEach((scrollers) => {
+                (scrollers || []).forEach((scroller) => {
+                    if (scroller !== sourceScroller && scroller.scrollLeft !== nextScrollLeft) {
+                        scroller.scrollLeft = nextScrollLeft;
+                    }
+                });
+            });
+
+            this.paneScrollbarElements.forEach((paneScrollbar) => {
+                if (paneScrollbar && paneScrollbar !== sourceScroller && paneScrollbar.scrollLeft !== nextScrollLeft) {
+                    paneScrollbar.scrollLeft = nextScrollLeft;
+                }
+            });
         }
 
         updateStatusForTab(tab) {
