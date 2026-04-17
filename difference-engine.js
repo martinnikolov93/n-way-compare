@@ -236,6 +236,83 @@
         return ops;
     }
 
+    function buildLineCountMap(lines) {
+        const counts = new Map();
+
+        lines.forEach((line) => {
+            counts.set(line, (counts.get(line) || 0) + 1);
+        });
+
+        return counts;
+    }
+
+    function isStructuralLine(text) {
+        const trimmed = typeof text === 'string' ? text.trim() : '';
+        return trimmed === '' || /^[{}()[\],;]+$/.test(trimmed);
+    }
+
+    function isMeaningfulLine(text) {
+        return !isStructuralLine(text);
+    }
+
+    function getNeighborMeaningfulLine(lines, startIndex, direction) {
+        for (
+            let lineIndex = startIndex + direction;
+            lineIndex >= 0 && lineIndex < lines.length;
+            lineIndex += direction
+        ) {
+            if (isMeaningfulLine(lines[lineIndex])) {
+                return lines[lineIndex];
+            }
+        }
+
+        return '';
+    }
+
+    function getRunInfo(lines, lineIndex) {
+        const text = lines[lineIndex];
+        let start = lineIndex;
+        let end = lineIndex;
+
+        while (start > 0 && lines[start - 1] === text) {
+            start -= 1;
+        }
+
+        while (end + 1 < lines.length && lines[end + 1] === text) {
+            end += 1;
+        }
+
+        return {
+            offset: lineIndex - start,
+            length: end - start + 1
+        };
+    }
+
+    function buildAlignmentTokens(lines, ownCountMap, otherCountMap) {
+        return lines.map((line, lineIndex) => {
+            const duplicateCount = Math.max(
+                ownCountMap.get(line) || 0,
+                otherCountMap.get(line) || 0
+            );
+
+            if (duplicateCount <= 1) {
+                return line;
+            }
+
+            const previousMeaningful = getNeighborMeaningfulLine(lines, lineIndex, -1);
+            const nextMeaningful = getNeighborMeaningfulLine(lines, lineIndex, 1);
+            const runInfo = getRunInfo(lines, lineIndex);
+
+            return [
+                line,
+                previousMeaningful,
+                nextMeaningful,
+                String(runInfo.offset),
+                String(runInfo.length)
+            ].join('\u0001');
+        });
+    }
+
     function getAnchorPaneIndex(panes) {
         if (!panes.length) {
             return 0;
@@ -265,9 +342,13 @@
     }
 
     function buildPaneAlignment(anchorLines, paneLines) {
+        const anchorCounts = buildLineCountMap(anchorLines);
+        const paneCounts = buildLineCountMap(paneLines);
+        const anchorTokens = buildAlignmentTokens(anchorLines, anchorCounts, paneCounts);
+        const paneTokens = buildAlignmentTokens(paneLines, paneCounts, anchorCounts);
         const beforeInserts = Array.from({ length: anchorLines.length + 1 }, () => []);
         const cellsByAnchor = Array(anchorLines.length).fill(null);
-        const ops = buildDiff(anchorLines, paneLines);
+        const ops = buildDiff(anchorTokens, paneTokens);
         let anchorCursor = 0;
         let blockStart = 0;
         let deletedIndices = [];
@@ -489,9 +570,36 @@
             }
         }
 
+        // If the selection begins in the middle of a missing block, preserve that
+        // relative offset when possible, but never jump past the next real line
+        // in the target file.
+        let missingOffset = 0;
+        for (let rowIndex = startRow - 1; rowIndex >= 0; rowIndex -= 1) {
+            const cell = rows[rowIndex]?.cells?.[paneIndex];
+            if (!cell || cell.lineNumber != null) {
+                break;
+            }
+
+            missingOffset += 1;
+        }
+
+        let nextExistingLineIndex = null;
+        for (let rowIndex = startRow; rowIndex < rows.length; rowIndex += 1) {
+            const lineNumber = rows[rowIndex]?.cells?.[paneIndex]?.lineNumber;
+            if (lineNumber != null) {
+                nextExistingLineIndex = lineNumber - 1;
+                break;
+            }
+        }
+
+        const desiredInsertionIndex = insertionIndex + missingOffset;
+        const clampedInsertionIndex = nextExistingLineIndex == null
+            ? desiredInsertionIndex
+            : Math.min(desiredInsertionIndex, nextExistingLineIndex);
+
         return {
-            startLine: insertionIndex,
-            endLine: insertionIndex
+            startLine: clampedInsertionIndex,
+            endLine: clampedInsertionIndex
         };
     }
 

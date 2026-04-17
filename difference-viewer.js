@@ -1238,6 +1238,143 @@
             };
         }
 
+        getTransferLinesFromPane(tab, sourcePaneIndex, targetPaneIndex, startRow, endRow) {
+            const sourceCells = [];
+            let targetHasContent = false;
+
+            for (let rowIndex = startRow; rowIndex <= endRow; rowIndex += 1) {
+                const sourceCell = tab.rows[rowIndex]?.cells?.[sourcePaneIndex];
+                const targetCell = tab.rows[rowIndex]?.cells?.[targetPaneIndex];
+
+                if (sourceCell && !sourceCell.missing && sourceCell.lineNumber != null) {
+                    sourceCells.push(sourceCell);
+                }
+
+                if (targetCell && !targetCell.missing && targetCell.lineNumber != null) {
+                    targetHasContent = true;
+                }
+            }
+
+            if (!sourceCells.length) {
+                return [];
+            }
+
+            if (targetHasContent) {
+                return sourceCells.map(cell => cell.text);
+            }
+
+            let blockStart = startRow;
+            while (blockStart > 0) {
+                const targetCell = tab.rows[blockStart - 1]?.cells?.[targetPaneIndex];
+                if (!targetCell || !targetCell.missing) {
+                    break;
+                }
+
+                blockStart -= 1;
+            }
+
+            let blockEnd = endRow;
+            while (blockEnd + 1 < tab.rows.length) {
+                const targetCell = tab.rows[blockEnd + 1]?.cells?.[targetPaneIndex];
+                if (!targetCell || !targetCell.missing) {
+                    break;
+                }
+
+                blockEnd += 1;
+            }
+
+            const blockSourceCells = [];
+            for (let rowIndex = blockStart; rowIndex <= blockEnd; rowIndex += 1) {
+                const sourceCell = tab.rows[rowIndex]?.cells?.[sourcePaneIndex];
+                if (sourceCell && !sourceCell.missing && sourceCell.lineNumber != null) {
+                    blockSourceCells.push({
+                        rowIndex,
+                        lineNumber: sourceCell.lineNumber
+                    });
+                }
+            }
+
+            const inferredBlockStartLineIndex = blockSourceCells.length
+                ? blockSourceCells[0].lineNumber - 1 - (blockSourceCells[0].rowIndex - blockStart)
+                : -1;
+            const blockHasStableSourceOffsets = (
+                inferredBlockStartLineIndex >= 0 &&
+                blockSourceCells.every((cell) => {
+                    return (cell.lineNumber - 1) === inferredBlockStartLineIndex + (cell.rowIndex - blockStart);
+                })
+            );
+
+            if (blockHasStableSourceOffsets) {
+                const startOffset = startRow - blockStart;
+                const endOffset = endRow - blockStart;
+                const startLineIndex = Math.max(0, inferredBlockStartLineIndex + startOffset);
+                const endLineIndex = Math.min(
+                    tab.panes[sourcePaneIndex].lines.length,
+                    inferredBlockStartLineIndex + endOffset + 1
+                );
+
+                if (endLineIndex > startLineIndex) {
+                    return tab.panes[sourcePaneIndex].lines.slice(startLineIndex, endLineIndex);
+                }
+            }
+
+            let firstLineIndex = sourceCells[0].lineNumber - 1;
+            let lastLineIndex = sourceCells[sourceCells.length - 1].lineNumber - 1;
+            const desiredLineCount = endRow - startRow + 1;
+            let searchBefore = startRow - 1;
+            let searchAfter = endRow + 1;
+
+            while ((lastLineIndex - firstLineIndex + 1) < desiredLineCount) {
+                let extended = false;
+
+                for (let rowIndex = searchAfter; rowIndex < tab.rows.length; rowIndex += 1) {
+                    const sourceCell = tab.rows[rowIndex]?.cells?.[sourcePaneIndex];
+                    const targetCell = tab.rows[rowIndex]?.cells?.[targetPaneIndex];
+
+                    if (sourceCell && !sourceCell.missing && sourceCell.lineNumber != null) {
+                        if ((!targetCell || targetCell.lineNumber == null) && sourceCell.lineNumber - 1 === lastLineIndex + 1) {
+                            lastLineIndex += 1;
+                            searchAfter = rowIndex + 1;
+                            extended = true;
+                        }
+                        break;
+                    }
+
+                    if (targetCell && targetCell.lineNumber != null) {
+                        break;
+                    }
+                }
+
+                if ((lastLineIndex - firstLineIndex + 1) >= desiredLineCount) {
+                    break;
+                }
+
+                for (let rowIndex = searchBefore; rowIndex >= 0; rowIndex -= 1) {
+                    const sourceCell = tab.rows[rowIndex]?.cells?.[sourcePaneIndex];
+                    const targetCell = tab.rows[rowIndex]?.cells?.[targetPaneIndex];
+
+                    if (sourceCell && !sourceCell.missing && sourceCell.lineNumber != null) {
+                        if ((!targetCell || targetCell.lineNumber == null) && sourceCell.lineNumber - 1 === firstLineIndex - 1) {
+                            firstLineIndex -= 1;
+                            searchBefore = rowIndex - 1;
+                            extended = true;
+                        }
+                        break;
+                    }
+
+                    if (targetCell && targetCell.lineNumber != null) {
+                        break;
+                    }
+                }
+
+                if (!extended) {
+                    break;
+                }
+            }
+
+            return tab.panes[sourcePaneIndex].lines.slice(firstLineIndex, lastLineIndex + 1);
+        }
+
         canCopySelectionToNeighbor(direction) {
             const selection = this.getSelection();
             if (!selection) {
@@ -1304,7 +1441,13 @@
                 return;
             }
 
-            const lines = window.DifferenceEngine.getSelectedLines(selection.tab.rows, selection.paneIndex, selection.startRow, selection.endRow);
+            const lines = this.getTransferLinesFromPane(
+                selection.tab,
+                selection.paneIndex,
+                targetPaneIndex,
+                selection.startRow,
+                selection.endRow
+            );
             this.applyReplacement(
                 selection.tab,
                 targetPaneIndex,
@@ -1326,7 +1469,13 @@
                 return;
             }
 
-            const lines = window.DifferenceEngine.getSelectedLines(selection.tab.rows, sourcePaneIndex, selection.startRow, selection.endRow);
+            const lines = this.getTransferLinesFromPane(
+                selection.tab,
+                sourcePaneIndex,
+                selection.paneIndex,
+                selection.startRow,
+                selection.endRow
+            );
             this.applyReplacement(
                 selection.tab,
                 selection.paneIndex,
