@@ -1238,6 +1238,83 @@
             };
         }
 
+        getPreviousMeaningfulLine(lines, startIndex) {
+            for (let lineIndex = startIndex - 1; lineIndex >= 0; lineIndex -= 1) {
+                const text = lines[lineIndex];
+                if (typeof text !== 'string') {
+                    continue;
+                }
+
+                const trimmed = text.trim();
+                if (trimmed && !/^[{}()[\],;]+$/.test(trimmed)) {
+                    return text;
+                }
+            }
+
+            return '';
+        }
+
+        getNextMeaningfulLine(lines, startIndex) {
+            for (let lineIndex = startIndex + 1; lineIndex < lines.length; lineIndex += 1) {
+                const text = lines[lineIndex];
+                if (typeof text !== 'string') {
+                    continue;
+                }
+
+                const trimmed = text.trim();
+                if (trimmed && !/^[{}()[\],;]+$/.test(trimmed)) {
+                    return text;
+                }
+            }
+
+            return '';
+        }
+
+        getRunInfo(lines, lineIndex) {
+            const text = lines[lineIndex];
+            let start = lineIndex;
+            let end = lineIndex;
+
+            while (start > 0 && lines[start - 1] === text) {
+                start -= 1;
+            }
+
+            while (end + 1 < lines.length && lines[end + 1] === text) {
+                end += 1;
+            }
+
+            return {
+                offset: lineIndex - start,
+                length: end - start + 1
+            };
+        }
+
+        buildTransferItem(tab, sourcePaneIndex, lineIndex) {
+            const sourceLines = tab.panes[sourcePaneIndex].lines;
+            const text = sourceLines[lineIndex] || '';
+            const runInfo = this.getRunInfo(sourceLines, lineIndex);
+
+            return {
+                text,
+                hint: {
+                    previousMeaningful: this.getPreviousMeaningfulLine(sourceLines, lineIndex),
+                    nextMeaningful: this.getNextMeaningfulLine(sourceLines, lineIndex),
+                    runOffset: runInfo.offset,
+                    runLength: runInfo.length
+                }
+            };
+        }
+
+        buildTransferItemsFromLineRange(tab, sourcePaneIndex, startLineIndex, endLineIndexExclusive) {
+            const items = [];
+
+            for (let lineIndex = startLineIndex; lineIndex < endLineIndexExclusive; lineIndex += 1) {
+                items.push(this.buildTransferItem(tab, sourcePaneIndex, lineIndex));
+            }
+
+            return items;
+        }
+
         getTransferLinesFromPane(tab, sourcePaneIndex, targetPaneIndex, startRow, endRow) {
             const sourceCells = [];
             let targetHasContent = false;
@@ -1260,7 +1337,7 @@
             }
 
             if (targetHasContent) {
-                return sourceCells.map(cell => cell.text);
+                return sourceCells.map(cell => this.buildTransferItem(tab, sourcePaneIndex, cell.lineNumber - 1));
             }
 
             let blockStart = startRow;
@@ -1314,7 +1391,7 @@
                 );
 
                 if (endLineIndex > startLineIndex) {
-                    return tab.panes[sourcePaneIndex].lines.slice(startLineIndex, endLineIndex);
+                    return this.buildTransferItemsFromLineRange(tab, sourcePaneIndex, startLineIndex, endLineIndex);
                 }
             }
 
@@ -1372,7 +1449,7 @@
                 }
             }
 
-            return tab.panes[sourcePaneIndex].lines.slice(firstLineIndex, lastLineIndex + 1);
+            return this.buildTransferItemsFromLineRange(tab, sourcePaneIndex, firstLineIndex, lastLineIndex + 1);
         }
 
         canCopySelectionToNeighbor(direction) {
@@ -1499,8 +1576,8 @@
                 return;
             }
 
-            const leftLines = window.DifferenceEngine.getSelectedLines(selection.tab.rows, leftPaneIndex, selection.startRow, selection.endRow);
-            const rightLines = window.DifferenceEngine.getSelectedLines(selection.tab.rows, rightPaneIndex, selection.startRow, selection.endRow);
+            const leftLines = this.getTransferLinesFromPane(selection.tab, leftPaneIndex, selection.paneIndex, selection.startRow, selection.endRow);
+            const rightLines = this.getTransferLinesFromPane(selection.tab, rightPaneIndex, selection.paneIndex, selection.startRow, selection.endRow);
             const mergedLines = order === 'left-right'
                 ? leftLines.concat(rightLines)
                 : rightLines.concat(leftLines);

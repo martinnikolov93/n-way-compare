@@ -288,7 +288,7 @@
         };
     }
 
-    function buildAlignmentTokens(lines, ownCountMap, otherCountMap) {
+    function buildAlignmentTokens(lines, ownCountMap, otherCountMap, lineHints) {
         return lines.map((line, lineIndex) => {
             const duplicateCount = Math.max(
                 ownCountMap.get(line) || 0,
@@ -299,9 +299,18 @@
                 return line;
             }
 
-            const previousMeaningful = getNeighborMeaningfulLine(lines, lineIndex, -1);
-            const nextMeaningful = getNeighborMeaningfulLine(lines, lineIndex, 1);
-            const runInfo = getRunInfo(lines, lineIndex);
+            const hint = Array.isArray(lineHints) ? lineHints[lineIndex] : null;
+            const previousMeaningful = hint?.previousMeaningful ?? getNeighborMeaningfulLine(lines, lineIndex, -1);
+            const nextMeaningful = hint?.nextMeaningful ?? getNeighborMeaningfulLine(lines, lineIndex, 1);
+            const runInfo = {
+                offset: hint?.runOffset,
+                length: hint?.runLength
+            };
+            if (!Number.isInteger(runInfo.offset) || !Number.isInteger(runInfo.length)) {
+                const computedRunInfo = getRunInfo(lines, lineIndex);
+                runInfo.offset = computedRunInfo.offset;
+                runInfo.length = computedRunInfo.length;
+            }
 
             return [
                 line,
@@ -341,11 +350,13 @@
         return distances[0]?.index ?? 0;
     }
 
-    function buildPaneAlignment(anchorLines, paneLines) {
+    function buildPaneAlignment(anchorPane, pane) {
+        const anchorLines = anchorPane.lines;
+        const paneLines = pane.lines;
         const anchorCounts = buildLineCountMap(anchorLines);
         const paneCounts = buildLineCountMap(paneLines);
-        const anchorTokens = buildAlignmentTokens(anchorLines, anchorCounts, paneCounts);
-        const paneTokens = buildAlignmentTokens(paneLines, paneCounts, anchorCounts);
+        const anchorTokens = buildAlignmentTokens(anchorLines, anchorCounts, paneCounts, anchorPane.lineHints);
+        const paneTokens = buildAlignmentTokens(paneLines, paneCounts, anchorCounts, pane.lineHints);
         const beforeInserts = Array.from({ length: anchorLines.length + 1 }, () => []);
         const cellsByAnchor = Array(anchorLines.length).fill(null);
         const ops = buildDiff(anchorTokens, paneTokens);
@@ -417,7 +428,8 @@
         }
 
         const anchorPaneIndex = getAnchorPaneIndex(panes);
-        const anchorLines = panes[anchorPaneIndex].lines;
+        const anchorPane = panes[anchorPaneIndex];
+        const anchorLines = anchorPane.lines;
         const alignments = panes.map((pane, paneIndex) => {
             if (paneIndex === anchorPaneIndex) {
                 return {
@@ -426,7 +438,7 @@
                 };
             }
 
-            return buildPaneAlignment(anchorLines, pane.lines);
+            return buildPaneAlignment(anchorPane, pane);
         });
 
         const rows = [];
@@ -495,9 +507,13 @@
     function rebuildTab(tab) {
         tab.panes = tab.panes.map(pane => {
             const parsed = parseTextContent(pane.content);
+            const lineHints = Array.isArray(pane.lineHints) && pane.lineHints.length === parsed.lines.length
+                ? pane.lineHints
+                : Array.from({ length: parsed.lines.length }, () => null);
             return {
                 ...pane,
-                ...parsed
+                ...parsed,
+                lineHints
             };
         });
 
@@ -606,15 +622,36 @@
     function replacePaneSelection(tab, paneIndex, startRow, endRow, replacementLines) {
         const pane = tab.panes[paneIndex];
         const { startLine, endLine } = getReplacementRange(tab.rows, paneIndex, startRow, endRow);
+        const normalizedReplacement = replacementLines.map((line) => {
+            if (line && typeof line === 'object' && !Array.isArray(line)) {
+                return {
+                    text: typeof line.text === 'string' ? line.text : '',
+                    hint: line.hint || null
+                };
+            }
+
+            return {
+                text: typeof line === 'string' ? line : '',
+                hint: null
+            };
+        });
+        const existingLineHints = Array.isArray(pane.lineHints) && pane.lineHints.length === pane.lines.length
+            ? pane.lineHints
+            : Array.from({ length: pane.lines.length }, () => null);
         const nextLines = pane.lines
             .slice(0, startLine)
-            .concat(replacementLines)
+            .concat(normalizedReplacement.map((line) => line.text))
             .concat(pane.lines.slice(endLine));
+        const nextLineHints = existingLineHints
+            .slice(0, startLine)
+            .concat(normalizedReplacement.map((line) => line.hint))
+            .concat(existingLineHints.slice(endLine));
 
         const nextPane = {
             ...pane,
             exists: true,
             lines: nextLines,
+            lineHints: nextLineHints,
             trailingNewline: nextLines.length ? pane.trailingNewline : false,
             dirty: true
         };
