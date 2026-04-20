@@ -105,26 +105,6 @@
   <script src="difference-engine.js"></script>
   <script src="difference-viewer.js"></script>
   <script src="renderer.js"></script>
-  <script>
-    const foldersDiv = document.getElementById('folders');
-    const addBtn = document.getElementById('addFolderBtn');
-    const loadConfigBtn = document.getElementById('loadConfigBtn');
-    const saveConfigBtn = document.getElementById('saveConfigBtn');
-    const scanBtn = document.getElementById('scanBtn');
-    const runCmdBtn = document.getElementById('runCmdBtn');
-
-    addBtn.addEventListener('click', () => {
-      const newInput = document.createElement('input');
-      newInput.className = 'folder-input';
-      newInput.placeholder = `Folder ${foldersDiv.children.length + 1}`;
-      foldersDiv.appendChild(newInput);
-    });
-
-    loadConfigBtn.addEventListener('click', () => window.loadConfig());
-    saveConfigBtn.addEventListener('click', () => window.saveConfig());
-    scanBtn.addEventListener('click', () => window.scan());
-    runCmdBtn.addEventListener('click', () => window.runCmd());
-  </script>
 </body>
 
 </html>

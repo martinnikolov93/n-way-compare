@@ -11,6 +11,12 @@
   --diff-inline: #ffe47b;
   --diff-inline-border: #d8af1d;
   --diff-hunk: #000;
+  --diff-row-red-soft: #ffd6d0;
+  --diff-row-red: #ffc7bd;
+  --diff-row-red-strong: #ffbbb0;
+  --diff-row-red-selected-soft: #ead0d6;
+  --diff-row-red-selected: #e6c4ca;
+  --diff-row-red-selected-strong: #dfb9c1;
 }
 
 .difference-modal {
@@ -440,7 +446,7 @@
 }
 
 .difference-cell.is-diff-row {
-  background: linear-gradient(180deg, #ffe2de 0%, #ffcfc8 100%);
+  background: var(--diff-row-red-soft);
 }
 
 .difference-cell.is-active-pane {
@@ -458,53 +464,41 @@
 }
 
 .difference-cell.is-changed-left {
-  background: linear-gradient(180deg, #ffd9d2 0%, #ffbdb4 100%);
+  background: var(--diff-row-red);
 }
 
 .difference-cell.is-changed-right {
-  background: linear-gradient(180deg, #ffd9d2 0%, #ffbdb4 100%);
+  background: var(--diff-row-red);
 }
 
 .difference-cell.is-changed-left.is-changed-right {
-  background: linear-gradient(180deg, #ffd4cc 0%, #ffb3a8 100%);
+  background: var(--diff-row-red-strong);
 }
 
 .difference-cell.is-selected.is-diff-row {
-  background:
-    linear-gradient(180deg, rgba(108, 122, 209, 0.16) 0%, rgba(108, 122, 209, 0.16) 100%),
-    linear-gradient(180deg, #ffe2de 0%, #ffcfc8 100%);
+  background: var(--diff-row-red-selected-soft);
 }
 
 .difference-cell.is-selected.is-active-pane.is-diff-row {
-  background:
-    linear-gradient(180deg, rgba(86, 105, 200, 0.24) 0%, rgba(86, 105, 200, 0.24) 100%),
-    linear-gradient(180deg, #ffe2de 0%, #ffcfc8 100%);
+  background: var(--diff-row-red-selected);
 }
 
 .difference-cell.is-selected.is-changed-left,
 .difference-cell.is-selected.is-changed-right {
-  background:
-    linear-gradient(180deg, rgba(108, 122, 209, 0.16) 0%, rgba(108, 122, 209, 0.16) 100%),
-    linear-gradient(180deg, #ffd9d2 0%, #ffbdb4 100%);
+  background: var(--diff-row-red-selected);
 }
 
 .difference-cell.is-selected.is-active-pane.is-changed-left,
 .difference-cell.is-selected.is-active-pane.is-changed-right {
-  background:
-    linear-gradient(180deg, rgba(86, 105, 200, 0.24) 0%, rgba(86, 105, 200, 0.24) 100%),
-    linear-gradient(180deg, #ffd9d2 0%, #ffbdb4 100%);
+  background: var(--diff-row-red-selected-strong);
 }
 
 .difference-cell.is-selected.is-changed-left.is-changed-right {
-  background:
-    linear-gradient(180deg, rgba(108, 122, 209, 0.16) 0%, rgba(108, 122, 209, 0.16) 100%),
-    linear-gradient(180deg, #ffd4cc 0%, #ffb3a8 100%);
+  background: var(--diff-row-red-selected-strong);
 }
 
 .difference-cell.is-selected.is-active-pane.is-changed-left.is-changed-right {
-  background:
-    linear-gradient(180deg, rgba(86, 105, 200, 0.24) 0%, rgba(86, 105, 200, 0.24) 100%),
-    linear-gradient(180deg, #ffd4cc 0%, #ffb3a8 100%);
+  background: var(--diff-row-red-selected-strong);
 }
 
 .difference-cell.is-missing {

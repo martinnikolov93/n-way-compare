@@ -52,10 +52,14 @@
         };
     }
 
+    function normalizeComparableLine(text) {
+        return typeof text === 'string' ? text.trim() : '';
+    }
+
     function cellsEqual(left, right) {
         if (!left && !right) return true;
         if (!left || !right) return false;
-        return left.text === right.text;
+        return normalizeComparableLine(left.text) === normalizeComparableLine(right.text);
     }
 
     function buildGreedyDiff(leftLines, rightLines) {
@@ -236,11 +240,12 @@
         return ops;
     }
 
-    function buildLineCountMap(lines) {
+    function buildLineCountMap(lines, normalizer = (value) => value) {
         const counts = new Map();
 
         lines.forEach((line) => {
-            counts.set(line, (counts.get(line) || 0) + 1);
+            const normalizedLine = normalizer(line);
+            counts.set(normalizedLine, (counts.get(normalizedLine) || 0) + 1);
         });
 
         return counts;
@@ -288,20 +293,25 @@
         };
     }
 
-    function buildAlignmentTokens(lines, ownCountMap, otherCountMap, lineHints) {
+    function buildAlignmentTokens(lines, ownCountMap, otherCountMap, lineHints, normalizer = (value) => value) {
         return lines.map((line, lineIndex) => {
+            const normalizedLine = normalizer(line);
             const duplicateCount = Math.max(
-                ownCountMap.get(line) || 0,
-                otherCountMap.get(line) || 0
+                ownCountMap.get(normalizedLine) || 0,
+                otherCountMap.get(normalizedLine) || 0
             );
 
             if (duplicateCount <= 1) {
-                return line;
+                return normalizedLine;
             }
 
             const hint = Array.isArray(lineHints) ? lineHints[lineIndex] : null;
-            const previousMeaningful = hint?.previousMeaningful ?? getNeighborMeaningfulLine(lines, lineIndex, -1);
-            const nextMeaningful = hint?.nextMeaningful ?? getNeighborMeaningfulLine(lines, lineIndex, 1);
+            const previousMeaningful = normalizer(
+                hint?.previousMeaningful ?? getNeighborMeaningfulLine(lines, lineIndex, -1)
+            );
+            const nextMeaningful = normalizer(
+                hint?.nextMeaningful ?? getNeighborMeaningfulLine(lines, lineIndex, 1)
+            );
             const runInfo = {
                 offset: hint?.runOffset,
                 length: hint?.runLength
@@ -313,7 +323,7 @@
             }
 
             return [
-                line,
+                normalizedLine,
                 previousMeaningful,
                 nextMeaningful,
                 String(runInfo.offset),
@@ -353,10 +363,10 @@
     function buildPaneAlignment(anchorPane, pane) {
         const anchorLines = anchorPane.lines;
         const paneLines = pane.lines;
-        const anchorCounts = buildLineCountMap(anchorLines);
-        const paneCounts = buildLineCountMap(paneLines);
-        const anchorTokens = buildAlignmentTokens(anchorLines, anchorCounts, paneCounts, anchorPane.lineHints);
-        const paneTokens = buildAlignmentTokens(paneLines, paneCounts, anchorCounts, pane.lineHints);
+        const anchorCounts = buildLineCountMap(anchorLines, normalizeComparableLine);
+        const paneCounts = buildLineCountMap(paneLines, normalizeComparableLine);
+        const anchorTokens = buildAlignmentTokens(anchorLines, anchorCounts, paneCounts, anchorPane.lineHints, normalizeComparableLine);
+        const paneTokens = buildAlignmentTokens(paneLines, paneCounts, anchorCounts, pane.lineHints, normalizeComparableLine);
         const beforeInserts = Array.from({ length: anchorLines.length + 1 }, () => []);
         const cellsByAnchor = Array(anchorLines.length).fill(null);
         const ops = buildDiff(anchorTokens, paneTokens);

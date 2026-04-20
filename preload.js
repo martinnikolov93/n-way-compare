@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('api', {
     deleteFile: (filePath) => ipcRenderer.invoke('delete-file', filePath),
     onFolderChange: (callback) => ipcRenderer.on('folder-changed', callback),
     watchFolders: (dirs) => ipcRenderer.invoke('watch-folders', dirs),
+    pickFolder: (initialPath) => ipcRenderer.invoke('pick-folder', initialPath),
     loadConfig: () => ipcRenderer.invoke('load-config'),
     saveConfig: (data) => ipcRenderer.invoke('save-config', data),
     runCommand: (data) => ipcRenderer.invoke('run-command', data),

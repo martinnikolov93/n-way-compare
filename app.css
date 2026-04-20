@@ -186,9 +186,14 @@ body {
 
 .folder-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
   gap: 12px;
   padding: 18px 22px 0;
+}
+
+.folder-input-shell {
+  position: relative;
+  min-width: 0;
 }
 
 .folder-input,
@@ -203,11 +208,52 @@ body {
   background: #ffffff;
 }
 
+.folder-input {
+  padding-right: 58px;
+}
+
 .folder-input:focus,
 .command-input:focus {
   outline: none;
   border-color: rgba(52, 102, 196, 0.8);
   box-shadow: 0 0 0 3px rgba(52, 102, 196, 0.1);
+}
+
+.folder-picker-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  bottom: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  padding: 0;
+  border: 1px solid rgba(173, 186, 207, 0.92);
+  border-radius: 12px;
+  background: #f6f9fd;
+  color: #35558e;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+
+.folder-picker-btn:hover {
+  border-color: rgba(86, 121, 188, 0.82);
+  background: #edf3ff;
+  color: #204da7;
+}
+
+.folder-picker-btn:focus-visible {
+  outline: none;
+  border-color: rgba(52, 102, 196, 0.8);
+  box-shadow: 0 0 0 3px rgba(52, 102, 196, 0.14);
+}
+
+.folder-picker-btn svg {
+  display: block;
+  width: 17px;
+  height: 17px;
+  fill: currentColor;
 }
 
 .workspace-toolbar,
@@ -342,6 +388,13 @@ body {
   flex-direction: column;
   gap: 14px;
   padding: 18px 22px 0;
+}
+
+.compare-results.is-suspended {
+  visibility: hidden;
+  content-visibility: hidden;
+  pointer-events: none;
+  overflow: hidden;
 }
 
 .compare-toolbar {
@@ -703,6 +756,11 @@ body {
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.07em;
+}
+
+.compare-slot-status.is-clean {
+  background: rgba(231, 247, 238, 0.98);
+  color: #246f48;
 }
 
 .compare-slot-status.is-missing {

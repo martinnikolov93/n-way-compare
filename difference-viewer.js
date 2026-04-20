@@ -69,6 +69,8 @@
             this.gridScroll = null;
             this.dragSelection = null;
             this.lastStatus = 'Open a file from the Difference button to compare and merge changes.';
+            this.compareResults = document.getElementById('fileList');
+            this.compareResultsPreviousHeight = null;
 
             this.build();
             document.addEventListener('keydown', this.handleKeyDown.bind(this));
@@ -669,6 +671,13 @@
         }
 
         show() {
+            if (!this.isOpen() && this.compareResults) {
+                this.compareResultsPreviousHeight = this.compareResults.style.height;
+                this.compareResults.style.height = `${this.compareResults.offsetHeight}px`;
+                this.compareResults.classList.add('is-suspended');
+                this.compareResults.setAttribute('aria-hidden', 'true');
+            }
+
             this.modal.classList.add('is-open');
             document.body.style.overflow = 'hidden';
         }
@@ -683,6 +692,13 @@
 
             this.modal.classList.remove('is-open');
             document.body.style.overflow = '';
+
+            if (this.compareResults) {
+                this.compareResults.classList.remove('is-suspended');
+                this.compareResults.style.height = this.compareResultsPreviousHeight ?? '';
+                this.compareResults.removeAttribute('aria-hidden');
+                this.compareResultsPreviousHeight = null;
+            }
         }
 
         persistTabs() {

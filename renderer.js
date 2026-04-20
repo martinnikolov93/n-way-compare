@@ -29,6 +29,97 @@ function getDirs() {
     return Array.from(inputs).map(input => input.value.trim()).filter(Boolean);
 }
 
+function getFoldersContainer() {
+    return document.getElementById('folders');
+}
+
+function refreshFolderInputPlaceholders() {
+    document.querySelectorAll('.folder-input').forEach((input, index) => {
+        input.placeholder = `Folder ${index + 1}`;
+    });
+}
+
+async function openFolderPickerForInput(input) {
+    if (!input) {
+        return;
+    }
+
+    try {
+        const selectedPath = await window.api.pickFolder(input.value.trim());
+
+        if (selectedPath) {
+            input.value = selectedPath;
+            input.title = selectedPath;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+    } catch (err) {
+        alert('Folder picker error: ' + err.message);
+    } finally {
+        input.focus();
+    }
+}
+
+function createFolderInputField(value = '') {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'folder-input-shell';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'folder-input';
+    input.value = value;
+    input.title = value;
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+    input.addEventListener('input', () => {
+        input.title = input.value.trim();
+    });
+
+    const pickerButton = document.createElement('button');
+    pickerButton.type = 'button';
+    pickerButton.className = 'folder-picker-btn';
+    pickerButton.title = 'Browse for folder';
+    pickerButton.setAttribute('aria-label', 'Browse for folder');
+    pickerButton.innerHTML = `
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M3.75 6.75a2.25 2.25 0 0 1 2.25-2.25h4.2c.58 0 1.13.23 1.54.64l1.12 1.11h5.14a2.25 2.25 0 0 1 2.25 2.25v7.5A2.25 2.25 0 0 1 18 18.75H6A2.25 2.25 0 0 1 3.75 16.5v-9.75Z"/>
+        </svg>
+    `;
+    pickerButton.addEventListener('click', () => {
+        openFolderPickerForInput(input);
+    });
+
+    wrapper.appendChild(input);
+    wrapper.appendChild(pickerButton);
+
+    return wrapper;
+}
+
+function appendFolderInputField(value = '') {
+    const foldersContainer = getFoldersContainer();
+    const field = createFolderInputField(value);
+
+    foldersContainer.appendChild(field);
+    refreshFolderInputPlaceholders();
+
+    return field.querySelector('.folder-input');
+}
+
+function setFolderInputs(paths = []) {
+    const foldersContainer = getFoldersContainer();
+    foldersContainer.replaceChildren();
+
+    paths.forEach(folderPath => {
+        foldersContainer.appendChild(createFolderInputField(folderPath));
+    });
+
+    while (foldersContainer.children.length < 2) {
+        foldersContainer.appendChild(createFolderInputField(''));
+    }
+
+    refreshFolderInputPlaceholders();
+}
+
 function setScanLoading(isLoading) {
     const loader = document.getElementById('scanLoader');
     if (!loader) return;
@@ -947,12 +1038,14 @@ function render() {
 
         const status = document.createElement('div');
         status.className = 'compare-slot-status';
-        status.textContent = exists ? (hasDiff ? 'Diff' : 'Available') : 'Missing';
+        status.textContent = exists ? (hasDiff ? 'Diff' : 'Synced') : 'Missing';
 
         if (!exists) {
             status.classList.add('is-missing');
         } else if (hasDiff) {
             status.classList.add('is-diff');
+        } else {
+            status.classList.add('is-clean');
         }
 
         const radio = document.createElement('input');
@@ -999,12 +1092,14 @@ function render() {
 
         const status = document.createElement('div');
         status.className = 'compare-slot-status';
-        status.textContent = entry ? (rowHasDiff ? 'Diff' : 'Present') : 'Missing';
+        status.textContent = entry ? (rowHasDiff ? 'Diff' : 'Synced') : 'Missing';
 
         if (!entry) {
             status.classList.add('is-missing');
         } else if (rowHasDiff) {
             status.classList.add('is-diff');
+        } else {
+            status.classList.add('is-clean');
         }
 
         const radio = document.createElement('input');
@@ -1690,16 +1785,7 @@ async function loadConfig() {
             return alert('Invalid config format. Expected array.');
         }
 
-        const foldersDiv = document.getElementById('folders');
-        foldersDiv.innerHTML = '';
-
-        data.forEach((path, index) => {
-            const input = document.createElement('input');
-            input.className = 'folder-input';
-            input.value = path;
-            input.placeholder = `Folder ${index + 1}`;
-            foldersDiv.appendChild(input);
-        });
+        setFolderInputs(data);
     } catch (err) {
         alert('Error loading config: ' + err.message);
     }
@@ -1745,3 +1831,15 @@ window.runCmd = runCmd;
 window.saveConfig = saveConfig;
 window.loadConfig = loadConfig;
 window.scan = scan;
+
+document.getElementById('addFolderBtn').addEventListener('click', async () => {
+    const input = appendFolderInputField('');
+    await openFolderPickerForInput(input);
+});
+
+document.getElementById('loadConfigBtn').addEventListener('click', () => loadConfig());
+document.getElementById('saveConfigBtn').addEventListener('click', () => saveConfig());
+document.getElementById('scanBtn').addEventListener('click', () => scan());
+document.getElementById('runCmdBtn').addEventListener('click', () => runCmd());
+
+setFolderInputs(Array.from(document.querySelectorAll('#folders .folder-input')).map(input => input.value));

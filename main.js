@@ -526,6 +526,49 @@ function scanDirs(baseDirs) {
     return applyDirtyUpdates(activeScanState);
 }
 
+function resolveDialogDefaultPath(inputPath = '') {
+    if (!inputPath || typeof inputPath !== 'string') {
+        return undefined;
+    }
+
+    let candidatePath = path.resolve(inputPath.trim());
+
+    while (candidatePath && candidatePath !== path.dirname(candidatePath)) {
+        if (fs.existsSync(candidatePath)) {
+            try {
+                return fs.statSync(candidatePath).isDirectory()
+                    ? candidatePath
+                    : path.dirname(candidatePath);
+            } catch {
+                return path.dirname(candidatePath);
+            }
+        }
+
+        candidatePath = path.dirname(candidatePath);
+    }
+
+    if (candidatePath && fs.existsSync(candidatePath)) {
+        return candidatePath;
+    }
+
+    return undefined;
+}
+
+ipcMain.handle('pick-folder', async (event, initialPath) => {
+    const browserWindow = BrowserWindow.fromWebContents(event.sender);
+    const defaultPath = resolveDialogDefaultPath(initialPath);
+    const result = await dialog.showOpenDialog(browserWindow, {
+        properties: ['openDirectory'],
+        defaultPath
+    });
+
+    if (result.canceled) {
+        return null;
+    }
+
+    return result.filePaths[0] || null;
+});
+
 ipcMain.handle('load-config', async () => {
     const result = await dialog.showOpenDialog({
         properties: ['openFile'],
