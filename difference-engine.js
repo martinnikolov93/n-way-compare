@@ -380,22 +380,69 @@
                 return;
             }
 
-            const pairedCount = Math.min(deletedIndices.length, insertedIndices.length);
+            const deletedLines = deletedIndices.map(index => normalizeComparableLine(anchorLines[index]));
+            const insertedLines = insertedIndices.map(index => normalizeComparableLine(paneLines[index]));
+            const blockOps = buildDiff(deletedLines, insertedLines);
+            let consumedDeleted = 0;
+            let pendingDeleted = [];
+            let pendingInserted = [];
 
-            for (let index = 0; index < pairedCount; index += 1) {
+            function flushPendingRun() {
+                if (!pendingDeleted.length && !pendingInserted.length) {
+                    return;
+                }
+
+                const pairCount = Math.min(pendingDeleted.length, pendingInserted.length);
+
+                for (let index = 0; index < pairCount; index += 1) {
+                    cellsByAnchor[pendingDeleted[index]] = createCell(
+                        paneLines[pendingInserted[index]],
+                        pendingInserted[index]
+                    );
+                }
+
+                for (let index = pairCount; index < pendingDeleted.length; index += 1) {
+                    cellsByAnchor[pendingDeleted[index]] = null;
+                }
+
+                if (pairCount < pendingInserted.length) {
+                    const insertionPosition = blockStart + consumedDeleted + pendingDeleted.length;
+                    for (let index = pairCount; index < pendingInserted.length; index += 1) {
+                        beforeInserts[insertionPosition].push(
+                            createCell(paneLines[pendingInserted[index]], pendingInserted[index])
+                        );
+                    }
+                }
+
+                consumedDeleted += pendingDeleted.length;
+                pendingDeleted = [];
+                pendingInserted = [];
+            }
+
+            blockOps.forEach(op => {
+                if (op.type === 'equal') {
+                    flushPendingRun();
+                    const anchorIndex = deletedIndices[op.aIndex];
+                    const paneIndex = insertedIndices[op.bIndex];
+                    cellsByAnchor[anchorIndex] = createCell(paneLines[paneIndex], paneIndex);
+                    consumedDeleted = op.aIndex + 1;
+                    return;
+                }
+
+                if (op.type === 'delete') {
+                    pendingDeleted.push(deletedIndices[op.aIndex]);
+                    return;
+                }
+
+                pendingInserted.push(insertedIndices[op.bIndex]);
+            });
+
+            flushPendingRun();
+
+            for (let index = 0; index < deletedIndices.length; index += 1) {
                 const anchorIndex = deletedIndices[index];
-                const paneIndex = insertedIndices[index];
-                cellsByAnchor[anchorIndex] = createCell(paneLines[paneIndex], paneIndex);
-            }
-
-            for (let index = pairedCount; index < deletedIndices.length; index += 1) {
-                cellsByAnchor[deletedIndices[index]] = null;
-            }
-
-            if (insertedIndices.length > pairedCount) {
-                const insertionPosition = blockStart + deletedIndices.length;
-                for (let index = pairedCount; index < insertedIndices.length; index += 1) {
-                    beforeInserts[insertionPosition].push(createCell(paneLines[insertedIndices[index]], insertedIndices[index]));
+                if (cellsByAnchor[anchorIndex] === undefined) {
+                    cellsByAnchor[anchorIndex] = null;
                 }
             }
 

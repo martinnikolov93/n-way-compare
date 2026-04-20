@@ -671,13 +671,20 @@ body {
 .compare-name-line {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 7px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .compare-name-title {
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 1 auto;
+  font-family: "Bahnschrift SemiCondensed", "Aptos Narrow", "Arial Narrow", "Roboto Condensed", "Segoe UI Variable Text", "Segoe UI", sans-serif;
   font-size: 13px;
   font-weight: 800;
+  letter-spacing: -0.01em;
   color: #1f2b42;
   white-space: nowrap;
   overflow: hidden;
@@ -696,6 +703,7 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
   min-height: 18px;
   padding: 2px 7px;
   border-radius: 999px;
@@ -705,10 +713,20 @@ body {
   letter-spacing: 0.07em;
 }
 
+.compare-state-badge-symbol {
+  min-width: 18px;
+  padding: 2px 6px;
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 .compare-kind-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
   width: 18px;
   min-width: 18px;
   font-size: 15px;

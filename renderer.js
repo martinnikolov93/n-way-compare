@@ -997,8 +997,10 @@ function render() {
         titleEl.title = title;
 
         const stateBadge = document.createElement('span');
-        stateBadge.className = `compare-state-badge ${hasDiff ? 'is-diff' : 'is-clean'}`;
-        stateBadge.textContent = hasDiff ? 'Diff' : 'Synced';
+        stateBadge.className = `compare-state-badge compare-state-badge-symbol ${hasDiff ? 'is-diff' : 'is-clean'}`;
+        stateBadge.textContent = hasDiff ? 'x' : '✓';
+        stateBadge.title = hasDiff ? 'Diff' : 'Synced';
+        stateBadge.setAttribute('aria-label', hasDiff ? 'Diff' : 'Synced');
 
         line.appendChild(kindIcon);
         line.appendChild(titleEl);
