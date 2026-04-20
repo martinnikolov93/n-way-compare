@@ -66,6 +66,9 @@
             this.codeContentElements = [];
             this.paneScrollbarElements = [];
             this.paneScrollbarSpacerElements = [];
+            this.pendingPaneScrollUpdates = new Map();
+            this.pendingPaneScrollFrame = 0;
+            this.isSyncingPaneScroll = false;
             this.gridScroll = null;
             this.dragSelection = null;
             this.lastStatus = 'Open a file from the Difference button to compare and merge changes.';
@@ -1150,28 +1153,51 @@
             });
         }
 
+        applyPaneScrollPosition(paneIndex, nextScrollLeft, sourceScroller = null) {
+            const scrollers = this.codeScrollerElements[paneIndex] || [];
+            scrollers.forEach((scroller) => {
+                if (scroller !== sourceScroller && scroller.scrollLeft !== nextScrollLeft) {
+                    scroller.scrollLeft = nextScrollLeft;
+                }
+            });
+
+            const paneScrollbar = this.paneScrollbarElements[paneIndex];
+            if (paneScrollbar && paneScrollbar !== sourceScroller && paneScrollbar.scrollLeft !== nextScrollLeft) {
+                paneScrollbar.scrollLeft = nextScrollLeft;
+            }
+        }
+
+        flushPendingPaneScrolls() {
+            this.pendingPaneScrollFrame = 0;
+            this.isSyncingPaneScroll = true;
+
+            this.pendingPaneScrollUpdates.forEach((update, paneIndex) => {
+                this.applyPaneScrollPosition(paneIndex, update.scrollLeft, update.sourceScroller);
+            });
+
+            this.pendingPaneScrollUpdates.clear();
+            this.isSyncingPaneScroll = false;
+        }
+
         syncPaneScroll(paneIndex, nextScrollLeft, sourceScroller = null) {
             const tab = this.getActiveTab();
-            if (!tab) {
+            if (!tab || this.isSyncingPaneScroll) {
                 return;
             }
 
             this.ensurePaneScrollState(tab);
             tab.paneScrollLefts = Array.from({ length: tab.panes.length }, () => nextScrollLeft);
 
-            this.codeScrollerElements.forEach((scrollers) => {
-                (scrollers || []).forEach((scroller) => {
-                    if (scroller !== sourceScroller && scroller.scrollLeft !== nextScrollLeft) {
-                        scroller.scrollLeft = nextScrollLeft;
-                    }
+            tab.paneScrollLefts.forEach((scrollLeft, targetPaneIndex) => {
+                this.pendingPaneScrollUpdates.set(targetPaneIndex, {
+                    scrollLeft,
+                    sourceScroller
                 });
             });
 
-            this.paneScrollbarElements.forEach((paneScrollbar) => {
-                if (paneScrollbar && paneScrollbar !== sourceScroller && paneScrollbar.scrollLeft !== nextScrollLeft) {
-                    paneScrollbar.scrollLeft = nextScrollLeft;
-                }
-            });
+            if (!this.pendingPaneScrollFrame) {
+                this.pendingPaneScrollFrame = requestAnimationFrame(() => this.flushPendingPaneScrolls());
+            }
         }
 
         updateStatusForTab(tab) {
