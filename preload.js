@@ -14,4 +14,5 @@ contextBridge.exposeInMainWorld('api', {
     runCommand: (data) => ipcRenderer.invoke('run-command', data),
     copyFolder: (data) => ipcRenderer.invoke('copy-folder', data),
     deleteFolder: (path) => ipcRenderer.invoke('delete-folder', path),
+    traceLog: (payload) => ipcRenderer.send('trace-log', payload),
 });

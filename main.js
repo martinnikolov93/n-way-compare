@@ -1,8 +1,34 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+﻿const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { exec } = require('child_process');
+const TRACE_LOG_PATH = path.join(__dirname, 'scan-trace.log');
+
+try {
+    fs.writeFileSync(TRACE_LOG_PATH, '');
+} catch {
+    // Best-effort trace reset.
+}
+
+appendTraceLine('trace-session-start', { pid: process.pid });
+
+function appendTraceLine(stage, payload = {}) {
+    const line = `[${new Date().toISOString()}] ${stage} ${JSON.stringify(payload)}\n`;
+
+    fs.appendFile(TRACE_LOG_PATH, line, () => {});
+    console.log(line.trimEnd());
+}
+
+function summarizeDirtyRoots(state) {
+    return (state?.dirtyRootsByDir || [])
+        .map((dirtyRoots, dirIndex) => ({
+            dirIndex,
+            count: dirtyRoots.size,
+            roots: Array.from(dirtyRoots).slice(0, 5)
+        }))
+        .filter(item => item.count > 0);
+}
 
 function createWindow() {
     const win = new BrowserWindow({
@@ -20,41 +46,235 @@ app.whenReady().then(createWindow);
 
 const chokidar = require('chokidar');
 let folderWatcher = null;
+let activeScanState = null;
+const WATCH_DEBOUNCE_MS = 120;
+const WATCH_MAX_WAIT_MS = 700;
 
-// функция за watch
+function getDirsSignature(baseDirs) {
+    return baseDirs.map(dir => path.resolve(dir)).join('||');
+}
+
+function createScanState(baseDirs) {
+    const resolvedDirs = baseDirs.map(dir => path.resolve(dir));
+
+    return {
+        signature: getDirsSignature(resolvedDirs),
+        baseDirs: resolvedDirs,
+        map: {},
+        entriesByDir: resolvedDirs.map(() => new Map()),
+        dirtyRootsByDir: resolvedDirs.map(() => new Set([''])),
+        initialized: false
+    };
+}
+
+function normalizeRelativePath(relativePath) {
+    if (!relativePath || relativePath === '.') {
+        return '';
+    }
+
+    return path.normalize(relativePath);
+}
+
+function isSameOrDescendantPath(candidate, root) {
+    if (!root) {
+        return true;
+    }
+
+    return candidate === root || candidate.startsWith(root + path.sep);
+}
+
+function markStateDirty(state, dirIndex, relativePath = '') {
+    const dirtyRoots = state?.dirtyRootsByDir?.[dirIndex];
+    if (!dirtyRoots) {
+        return;
+    }
+
+    const normalizedPath = normalizeRelativePath(relativePath);
+
+    if (!normalizedPath) {
+        dirtyRoots.clear();
+        dirtyRoots.add('');
+        return;
+    }
+
+    if (dirtyRoots.has('')) {
+        return;
+    }
+
+    const descendantsToRemove = [];
+
+    for (const dirtyRoot of dirtyRoots) {
+        if (isSameOrDescendantPath(normalizedPath, dirtyRoot)) {
+            return;
+        }
+
+        if (isSameOrDescendantPath(dirtyRoot, normalizedPath)) {
+            descendantsToRemove.push(dirtyRoot);
+        }
+    }
+
+    descendantsToRemove.forEach(dirtyRoot => dirtyRoots.delete(dirtyRoot));
+    dirtyRoots.add(normalizedPath);
+}
+
+function markPathDirty(fullPath) {
+    if (!activeScanState || !fullPath) {
+        return;
+    }
+
+    const resolvedPath = path.resolve(fullPath);
+
+    activeScanState.baseDirs.forEach((baseDir, dirIndex) => {
+        const relativePath = path.relative(baseDir, resolvedPath);
+
+        if (relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath))) {
+            markStateDirty(activeScanState, dirIndex, relativePath);
+        }
+    });
+}
+
+function markPathsDirty(pathsToMark) {
+    pathsToMark.forEach(fullPath => markPathDirty(fullPath));
+}
+
+function getWatcherIgnoreReason(event, changedPath, watchedFolders) {
+    if (!changedPath) {
+        return 'missing-path';
+    }
+
+    const resolvedPath = path.resolve(changedPath);
+    const resolvedRoots = watchedFolders.map(folder => path.resolve(folder));
+
+    if (event === 'change') {
+        if (resolvedRoots.includes(resolvedPath)) {
+            return 'root-directory-change';
+        }
+
+        try {
+            if (fs.existsSync(resolvedPath) && fs.statSync(resolvedPath).isDirectory()) {
+                return 'directory-metadata-change';
+            }
+        } catch {
+            // If the path disappeared between events, let the scan path handle it.
+        }
+    }
+
+    return null;
+}
+
+function shouldIgnoreWatcherEvent(event, changedPath, watchedFolders) {
+    return Boolean(getWatcherIgnoreReason(event, changedPath, watchedFolders));
+}
+
+function setStateEntry(state, dirIndex, relativePath, entry) {
+    state.entriesByDir[dirIndex].set(relativePath, entry);
+
+    if (!state.map[relativePath]) {
+        state.map[relativePath] = {};
+    }
+
+    state.map[relativePath][dirIndex] = entry;
+}
+
+function removeStateEntry(state, dirIndex, relativePath) {
+    state.entriesByDir[dirIndex].delete(relativePath);
+
+    const mapEntry = state.map[relativePath];
+    if (!mapEntry) {
+        return;
+    }
+
+    delete mapEntry[dirIndex];
+
+    if (!Object.keys(mapEntry).length) {
+        delete state.map[relativePath];
+    }
+}
+
+// С„СѓРЅРєС†РёСЏ Р·Р° watch
 function watchFolders(folders) {
-    // спираме стария watcher
-    if (folderWatcher) folderWatcher.close();
+    if (folderWatcher) {
+        folderWatcher.close();
+    }
 
-    // нов watcher
+    appendTraceLine('watch-start', { folderCount: folders.length });
+
     folderWatcher = chokidar.watch(folders, {
-        ignoreInitial: true, // не стартираме при инициализация
+        ignoreInitial: true,
         persistent: true,
         depth: 99
     });
 
-    // дебаунс
     let scanTimeout = null;
-    const triggerScan = () => {
-        if (scanTimeout) clearTimeout(scanTimeout);
-        scanTimeout = setTimeout(() => {
+    let burstStartedAt = 0;
+
+    const flushScan = () => {
+        if (scanTimeout) {
+            clearTimeout(scanTimeout);
             scanTimeout = null;
-            // уведомяваме renderer
-            BrowserWindow.getAllWindows().forEach(win => {
-                win.webContents.send('folder-changed');
-            });
-        }, 500); // 0.5s delay
+        }
+
+        const burstDurationMs = burstStartedAt ? Date.now() - burstStartedAt : 0;
+        burstStartedAt = 0;
+        appendTraceLine('watcher-flush', { burstDurationMs });
+
+        BrowserWindow.getAllWindows().forEach(win => {
+            win.webContents.send('folder-changed');
+        });
     };
 
-    folderWatcher.on('all', (event, path) => {
-        console.log('Folder change detected:', event, path);
+    const triggerScan = () => {
+        const now = Date.now();
+
+        if (!burstStartedAt) {
+            burstStartedAt = now;
+        }
+
+        if (scanTimeout) {
+            clearTimeout(scanTimeout);
+        }
+
+        const elapsed = now - burstStartedAt;
+        const remainingMaxWait = Math.max(0, WATCH_MAX_WAIT_MS - elapsed);
+        const delay = Math.min(WATCH_DEBOUNCE_MS, remainingMaxWait);
+
+        scanTimeout = setTimeout(() => {
+            flushScan();
+        }, delay);
+    };
+
+    folderWatcher.on('all', (event, changedPath) => {
+        const ignoreReason = getWatcherIgnoreReason(event, changedPath, folders);
+
+        if (ignoreReason) {
+            appendTraceLine('watcher-ignore', { event, changedPath, reason: ignoreReason });
+            return;
+        }
+
+        appendTraceLine('watcher-event', {
+            event,
+            changedPath,
+            dirtyBefore: summarizeDirtyRoots(activeScanState)
+        });
+
+        markPathDirty(changedPath);
+
+        appendTraceLine('watcher-dirty', {
+            event,
+            changedPath,
+            dirtyAfter: summarizeDirtyRoots(activeScanState)
+        });
+
         triggerScan();
     });
 }
 
-// IPC за стартиране на watch
 ipcMain.handle('watch-folders', async (e, folders) => {
     watchFolders(folders);
+});
+
+ipcMain.on('trace-log', (event, payload) => {
+    appendTraceLine(`renderer-${payload?.stage || 'unknown'}`, payload?.data || {});
 });
 
 function hashFile(filePath) {
@@ -66,36 +286,315 @@ function hashFile(filePath) {
     }
 }
 
-function scanDirs(baseDirs) {
-    const map = {};
+function collectDirectoryEntries(state, dirIndex, currentDir, rel = '', options = {}) {
+    const { suppressErrors = false, impactedFiles = null, impactedPaths = null } = options;
+    let dirEntries;
 
-    baseDirs.forEach((dir, idx) => {
-        function walk(current, rel = '') {
-            fs.readdirSync(current, { withFileTypes: true }).forEach(entry => {
-                const full = path.join(current, entry.name);
-                const relative = path.join(rel, entry.name);
-
-                if (entry.isDirectory()) {
-                    if (!map[relative]) map[relative] = {};
-                    map[relative][idx] = {
-                        path: full,
-                        isDir: true
-                    };
-
-                    walk(full, relative);
-                } else {
-                    if (!map[relative]) map[relative] = {};
-                    map[relative][idx] = {
-                        path: full,
-                        hash: getSmartHash(full)
-                    };
-                }
-            });
+    try {
+        dirEntries = fs.readdirSync(currentDir, { withFileTypes: true });
+    } catch (err) {
+        if (suppressErrors) {
+            return;
         }
-        walk(dir);
+
+        throw err;
+    }
+
+    dirEntries.forEach(entry => {
+        const full = path.join(currentDir, entry.name);
+        const relative = rel ? path.join(rel, entry.name) : entry.name;
+
+        if (entry.isDirectory()) {
+            setStateEntry(state, dirIndex, relative, {
+                path: full,
+                isDir: true
+            });
+
+            if (impactedPaths) {
+                impactedPaths.add(relative);
+            }
+
+            collectDirectoryEntries(state, dirIndex, full, relative, {
+                suppressErrors,
+                impactedFiles,
+                impactedPaths
+            });
+            return;
+        }
+
+        const fileEntry = {
+            path: full,
+            isDir: false,
+            hash: null
+        };
+
+        setStateEntry(state, dirIndex, relative, fileEntry);
+
+        if (impactedFiles) {
+            impactedFiles.add(relative);
+        }
+
+        if (impactedPaths) {
+            impactedPaths.add(relative);
+        }
+    });
+}
+
+function removeEntriesUnderRoot(state, dirIndex, relativeRoot, impactedFiles, impactedPaths, fullPath = null) {
+    const normalizedRoot = normalizeRelativePath(relativeRoot);
+
+    if (normalizedRoot) {
+        const directEntry = state.entriesByDir[dirIndex].get(normalizedRoot);
+
+        if (directEntry && !directEntry.isDir) {
+            if (impactedPaths) {
+                impactedPaths.add(normalizedRoot);
+            }
+
+            impactedFiles.add(normalizedRoot);
+            hashCache.delete(directEntry.path);
+            removeStateEntry(state, dirIndex, normalizedRoot);
+            return;
+        }
+
+        if (!directEntry && fullPath) {
+            try {
+                const stat = fs.statSync(fullPath);
+
+                if (stat.isFile()) {
+                    if (impactedPaths) {
+                        impactedPaths.add(normalizedRoot);
+                    }
+
+                    return;
+                }
+            } catch {
+                // Fall back to the subtree walk for missing or unreadable paths.
+            }
+        }
+    }
+
+    const entries = Array.from(state.entriesByDir[dirIndex].entries());
+
+    entries.forEach(([relativePath, entry]) => {
+        if (!normalizedRoot || isSameOrDescendantPath(relativePath, normalizedRoot)) {
+            if (impactedPaths) {
+                impactedPaths.add(relativePath);
+            }
+
+            if (entry && !entry.isDir) {
+                impactedFiles.add(relativePath);
+                hashCache.delete(entry.path);
+            }
+
+            removeStateEntry(state, dirIndex, relativePath);
+        }
+    });
+}
+
+function scanExistingRoot(state, dirIndex, relativeRoot, impactedFiles, impactedPaths) {
+    const baseDir = state.baseDirs[dirIndex];
+    const fullPath = relativeRoot ? path.join(baseDir, relativeRoot) : baseDir;
+
+    if (!fs.existsSync(fullPath)) {
+        return;
+    }
+
+    let stat;
+
+    try {
+        stat = fs.statSync(fullPath);
+    } catch {
+        return;
+    }
+
+    if (stat.isDirectory()) {
+        if (relativeRoot) {
+            setStateEntry(state, dirIndex, relativeRoot, {
+                path: fullPath,
+                isDir: true
+            });
+
+            if (impactedPaths) {
+                impactedPaths.add(relativeRoot);
+            }
+        }
+
+        collectDirectoryEntries(state, dirIndex, fullPath, relativeRoot, {
+            suppressErrors: true,
+            impactedFiles,
+            impactedPaths
+        });
+        return;
+    }
+
+    const fileEntry = {
+        path: fullPath,
+        isDir: false,
+        hash: null
+    };
+
+    setStateEntry(state, dirIndex, relativeRoot, fileEntry);
+    impactedFiles.add(relativeRoot);
+
+    if (impactedPaths) {
+        impactedPaths.add(relativeRoot);
+    }
+}
+
+function finalizeHashesForRelativePaths(state, relativePaths) {
+    relativePaths.forEach(relativePath => {
+        const mapEntry = state.map[relativePath];
+
+        if (!mapEntry) {
+            return;
+        }
+
+        const fileEntries = Object.values(mapEntry).filter(entry => entry && !entry.isDir);
+
+        if (!fileEntries.length) {
+            return;
+        }
+
+        if (fileEntries.length === 1) {
+            fileEntries[0].hash = '__FILE_PRESENT__';
+            return;
+        }
+
+        fileEntries.forEach(fileEntry => {
+            fileEntry.hash = getSmartHash(fileEntry.path);
+        });
+    });
+}
+
+function hasPendingDirtyUpdates(state) {
+    return state.dirtyRootsByDir.some(dirtyRoots => dirtyRoots.size > 0);
+}
+
+function buildIncrementalPayload(state, impactedPaths) {
+    if (!impactedPaths.size) {
+        return { mode: 'noop' };
+    }
+
+    const currentPathCount = Object.keys(state.map).length;
+    if (impactedPaths.size > currentPathCount * 0.6) {
+        return {
+            mode: 'full',
+            data: state.map
+        };
+    }
+
+    const upserts = {};
+    const removals = [];
+
+    impactedPaths.forEach(relativePath => {
+        if (state.map[relativePath]) {
+            upserts[relativePath] = state.map[relativePath];
+            return;
+        }
+
+        removals.push(relativePath);
     });
 
-    return map;
+    if (!Object.keys(upserts).length && !removals.length) {
+        return { mode: 'noop' };
+    }
+
+    return {
+        mode: 'patch',
+        upserts,
+        removals
+    };
+}
+
+function performFullScan(state) {
+    state.map = {};
+    state.entriesByDir = state.baseDirs.map(() => new Map());
+
+    const impactedFiles = new Set();
+
+    state.baseDirs.forEach((dir, dirIndex) => {
+        collectDirectoryEntries(state, dirIndex, dir, '', {
+            suppressErrors: false,
+            impactedFiles
+        });
+    });
+
+    finalizeHashesForRelativePaths(state, impactedFiles);
+    state.dirtyRootsByDir = state.baseDirs.map(() => new Set());
+    state.initialized = true;
+}
+
+function applyDirtyUpdates(state) {
+    const impactedFiles = new Set();
+    const impactedPaths = new Set();
+
+    state.dirtyRootsByDir.forEach((dirtyRoots, dirIndex) => {
+        if (!dirtyRoots.size) {
+            return;
+        }
+
+        const rootsToRefresh = Array.from(dirtyRoots).sort((left, right) => left.length - right.length);
+        dirtyRoots.clear();
+
+        rootsToRefresh.forEach(relativeRoot => {
+            const fullPath = relativeRoot ? path.join(state.baseDirs[dirIndex], relativeRoot) : state.baseDirs[dirIndex];
+            removeEntriesUnderRoot(state, dirIndex, relativeRoot, impactedFiles, impactedPaths, fullPath);
+            scanExistingRoot(state, dirIndex, relativeRoot, impactedFiles, impactedPaths);
+        });
+    });
+
+    finalizeHashesForRelativePaths(state, impactedFiles);
+    return buildIncrementalPayload(state, impactedPaths);
+}
+
+function scanDirs(baseDirs) {
+    const startedAt = Date.now();
+    const signature = getDirsSignature(baseDirs);
+    const dirtyBefore = summarizeDirtyRoots(activeScanState);
+
+    if (!activeScanState || activeScanState.signature !== signature) {
+        activeScanState = createScanState(baseDirs);
+    }
+
+    if (!activeScanState.initialized) {
+        performFullScan(activeScanState);
+        const result = {
+            mode: 'full',
+            data: activeScanState.map
+        };
+        appendTraceLine('scan-main', {
+            mode: result.mode,
+            durationMs: Date.now() - startedAt,
+            dirtyBefore,
+            entryCount: Object.keys(activeScanState.map).length
+        });
+        return result;
+    }
+
+    if (!hasPendingDirtyUpdates(activeScanState)) {
+        const result = {
+            mode: 'noop'
+        };
+        appendTraceLine('scan-main', {
+            mode: result.mode,
+            durationMs: Date.now() - startedAt,
+            dirtyBefore
+        });
+        return result;
+    }
+
+    const result = applyDirtyUpdates(activeScanState);
+    appendTraceLine('scan-main', {
+        mode: result.mode,
+        durationMs: Date.now() - startedAt,
+        dirtyBefore,
+        dirtyAfter: summarizeDirtyRoots(activeScanState),
+        impactedCount: result.mode === 'patch'
+            ? Object.keys(result.upserts || {}).length + (result.removals || []).length
+            : Object.keys(result.data || {}).length
+    });
+    return result;
 }
 
 ipcMain.handle('load-config', async () => {
@@ -140,7 +639,7 @@ ipcMain.handle('run-command', async (e, { dirs, command }) => {
 
     try {
         dirs.forEach(dir => {
-            // стартира cmd в тази папка
+            // СЃС‚Р°СЂС‚РёСЂР° cmd РІ С‚Р°Р·Рё РїР°РїРєР°
             spawn('cmd.exe', ['/c', command], {
                 cwd: dir,
                 detached: true,
@@ -224,16 +723,17 @@ ipcMain.handle('copy-file', async (e, { src, targets }) => {
 
     try {
         targets.forEach(target => {
-            // създаваме директорията ако липсва
+            // СЃСЉР·РґР°РІР°РјРµ РґРёСЂРµРєС‚РѕСЂРёСЏС‚Р° Р°РєРѕ Р»РёРїСЃРІР°
             const dir = path.dirname(target);
             if (!fs.existsSync(dir)) {
                 fs.mkdirSync(dir, { recursive: true });
             }
 
-            // копираме файла
+            // РєРѕРїРёСЂР°РјРµ С„Р°Р№Р»Р°
             fs.copyFileSync(src, target);
         });
 
+        markPathsDirty(targets);
         return { success: true };
     } catch (err) {
         console.error('Copy error:', err);
@@ -248,6 +748,8 @@ ipcMain.handle('delete-file', async (e, filePath) => {
         if (fs.existsSync(filePath)) {
             fs.unlinkSync(filePath);
         }
+
+        markPathDirty(filePath);
         return { success: true };
     } catch (err) {
         console.error('Delete error:', err);
@@ -281,6 +783,7 @@ ipcMain.handle('copy-folder', async (e, { src, targets }) => {
             copyRecursive(src, target);
         });
 
+        markPathsDirty(targets);
         return { success: true };
     } catch (err) {
         console.error('Folder copy error:', err);
@@ -310,6 +813,7 @@ ipcMain.handle('delete-folder', async (e, folderPath) => {
 
     try {
         deleteRecursive(folderPath);
+        markPathDirty(folderPath);
         return { success: true };
     } catch (err) {
         console.error('Folder delete error:', err);
@@ -320,8 +824,8 @@ ipcMain.handle('delete-folder', async (e, folderPath) => {
 function normalizeContent(buffer) {
     return buffer
         .toString('utf8')
-        .replace(/\r\n/g, '\n') // CRLF → LF
-        .trim();                // маха trailing whitespace
+        .replace(/\r\n/g, '\n') // CRLF в†’ LF
+        .trim();                // РјР°С…Р° trailing whitespace
 }
 
 function getFileHash(filePath) {
@@ -345,12 +849,12 @@ function getSmartHash(filePath) {
     const stat = fs.statSync(filePath);
     const key = stat.size + '_' + stat.mtimeMs;
 
-    // ✅ ако вече сме го смятали → връщаме кеша
+    // вњ… Р°РєРѕ РІРµС‡Рµ СЃРјРµ РіРѕ СЃРјСЏС‚Р°Р»Рё в†’ РІСЂСЉС‰Р°РјРµ РєРµС€Р°
     if (hashCache.has(filePath) && hashCache.get(filePath).key === key) {
         return hashCache.get(filePath).hash;
     }
 
-    // ❗ само ако има промяна → правим hash
+    // вќ— СЃР°РјРѕ Р°РєРѕ РёРјР° РїСЂРѕРјСЏРЅР° в†’ РїСЂР°РІРёРј hash
     const hash = getFileHash(filePath);
 
     hashCache.set(filePath, { key, hash });
