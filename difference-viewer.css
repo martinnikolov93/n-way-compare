@@ -532,6 +532,10 @@
   overflow-y: hidden;
 }
 
+.difference-code-scroll.is-editing {
+  overflow: hidden;
+}
+
 .difference-code {
   display: inline-block;
   min-width: 100%;
@@ -546,6 +550,29 @@
 .difference-code.is-placeholder {
   color: #6e7d92;
   font-style: italic;
+}
+
+.difference-cell.is-editing {
+  box-shadow: inset 0 0 0 1px #4f77bc;
+}
+
+.difference-inline-editor {
+  display: block;
+  width: 100%;
+  min-width: 100%;
+  min-height: 100%;
+  margin: 0;
+  padding: 1px 6px 1px 7px;
+  border: 0;
+  outline: none;
+  resize: none;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: transparent;
+  color: var(--diff-text);
+  font: inherit;
+  line-height: 1.25;
+  white-space: pre;
 }
 
 .difference-inline-change {

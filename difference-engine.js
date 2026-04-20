@@ -1,4 +1,6 @@
 (function () {
+    const EXACT_DIFF_PRODUCT_LIMIT = 250000;
+
     function detectNewline(text) {
         return text.includes('\r\n') ? '\r\n' : '\n';
     }
@@ -197,7 +199,7 @@
         }
 
         const product = middleLeft.length * middleRight.length;
-        const middleOps = product <= 4000000
+        const middleOps = product <= EXACT_DIFF_PRODUCT_LIMIT
             ? buildExactDiff(middleLeft, middleRight)
             : buildGreedyDiff(middleLeft, middleRight);
 
