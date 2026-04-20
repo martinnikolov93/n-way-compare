@@ -502,6 +502,10 @@ body {
   border-left: 1px solid var(--app-border);
 }
 
+.compare-actions-cell .compare-surface {
+  border-left: 1px solid var(--app-border);
+}
+
 .compare-header-panel {
   display: flex;
   flex-direction: column;
@@ -633,7 +637,11 @@ body {
 
 .compare-chevron {
   position: relative;
-  margin-top: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 0;
+  padding: 0;
   border: 1px solid rgba(150, 166, 191, 0.92);
   background: #ffffff;
   cursor: pointer;
@@ -642,19 +650,18 @@ body {
 .compare-chevron::before {
   content: "";
   position: absolute;
-  top: 7px;
-  left: 8px;
+  top: 50%;
+  left: 50%;
   width: 7px;
   height: 7px;
   border-right: 2px solid #42577d;
   border-bottom: 2px solid #42577d;
-  transform: rotate(-45deg);
-  transition: transform 0.14s ease, top 0.14s ease;
+  transform: translate(-55%, -50%) rotate(-45deg);
+  transition: transform 0.14s ease;
 }
 
 .compare-chevron.is-expanded::before {
-  top: 6px;
-  transform: rotate(45deg);
+  transform: translate(-50%, -55%) rotate(45deg);
 }
 
 .compare-chevron:hover {
@@ -822,31 +829,44 @@ body {
   display: flex;
   align-items: center;
   min-height: 100%;
-  padding: 7px 10px;
+  padding: 6px 8px;
   background: #f5f8fc;
 }
 
 .compare-action-group {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.compare-action-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
 }
 
 .compare-action-btn {
   appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid rgba(164, 179, 203, 0.95);
   border-radius: 999px;
-  padding: 6px 10px;
+  width: 100%;
+  min-width: 0;
+  padding: 5px 8px;
   background: #ffffff;
   color: #2b3c57;
   font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.03em;
+  white-space: nowrap;
   cursor: pointer;
   transition: border-color 0.12s ease, background 0.12s ease, opacity 0.12s ease;
 }
 
-.compare-action-btn:hover {
+.compare-action-btn:not(:disabled):hover {
   border-color: rgba(86, 121, 188, 0.92);
   background: #edf3ff;
 }
@@ -856,16 +876,33 @@ body {
   opacity: 0.45;
 }
 
+.compare-action-btn:disabled:hover {
+  border-color: rgba(164, 179, 203, 0.95);
+  background: #ffffff;
+}
+
 .compare-action-btn.is-primary {
   background: #edf3ff;
   color: #23488f;
   border-color: rgba(125, 150, 199, 0.95);
 }
 
+.compare-action-btn.is-primary:not(:disabled):hover {
+  background: #dce8ff;
+  border-color: rgba(86, 121, 188, 0.96);
+  color: #173d84;
+}
+
 .compare-action-btn.is-danger {
   background: #fff2ef;
   color: var(--app-danger);
   border-color: rgba(214, 151, 145, 0.95);
+}
+
+.compare-action-btn.is-danger:not(:disabled):hover {
+  background: #ffe3dc;
+  border-color: rgba(197, 110, 100, 0.96);
+  color: #a4372f;
 }
 
 .compare-empty-state {

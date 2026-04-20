@@ -17,7 +17,7 @@ let queuedResetCache = false;
 const COMPARE_LAYOUT = Object.freeze({
     nameWidth: 360,
     directoryWidth: 168,
-    actionsWidth: 352
+    actionsWidth: 248
 });
 
 function arraysEqual(a, b) {
@@ -1186,6 +1186,10 @@ function render() {
         const { cell: fileActionCell, surface: fileActionSurface } = createCompareCell('compare-actions-cell', 'compare-actions-panel');
         const fileActionGroup = document.createElement('div');
         fileActionGroup.className = 'compare-action-group';
+        const fileActionPrimaryRow = document.createElement('div');
+        fileActionPrimaryRow.className = 'compare-action-row';
+        const fileActionSecondaryRow = document.createElement('div');
+        fileActionSecondaryRow.className = 'compare-action-row';
 
         const availableFiles = Object.values(entries || {}).filter(Boolean).map(entry => entry.path);
 
@@ -1274,10 +1278,12 @@ function render() {
             }
         });
 
-        fileActionGroup.appendChild(diffuseBtn);
-        fileActionGroup.appendChild(differenceBtn);
-        fileActionGroup.appendChild(copyBtn);
-        fileActionGroup.appendChild(deleteBtn);
+        fileActionPrimaryRow.appendChild(diffuseBtn);
+        fileActionPrimaryRow.appendChild(differenceBtn);
+        fileActionSecondaryRow.appendChild(copyBtn);
+        fileActionSecondaryRow.appendChild(deleteBtn);
+        fileActionGroup.appendChild(fileActionPrimaryRow);
+        fileActionGroup.appendChild(fileActionSecondaryRow);
         fileActionSurface.appendChild(fileActionGroup);
         row.appendChild(fileActionCell);
 
@@ -1411,6 +1417,8 @@ function render() {
                     const { cell: actionCell, surface: actionSurface } = createCompareCell('compare-actions-cell', 'compare-actions-panel');
                     const actionGroup = document.createElement('div');
                     actionGroup.className = 'compare-action-group';
+                    const actionRow = document.createElement('div');
+                    actionRow.className = 'compare-action-row';
 
                     const copyFolderBtn = createActionButton({
                         label: 'Copy',
@@ -1464,8 +1472,9 @@ function render() {
                         }
                     });
 
-                    actionGroup.appendChild(copyFolderBtn);
-                    actionGroup.appendChild(deleteFolderBtn);
+                    actionRow.appendChild(copyFolderBtn);
+                    actionRow.appendChild(deleteFolderBtn);
+                    actionGroup.appendChild(actionRow);
                     actionSurface.appendChild(actionGroup);
                     nextHeader.appendChild(actionCell);
 

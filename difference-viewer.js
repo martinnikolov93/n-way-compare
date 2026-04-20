@@ -86,6 +86,7 @@
             this.dragSelection = null;
             this.inlineEditor = null;
             this.pendingRowReveal = null;
+            this.pendingViewerOpenScrollReset = null;
             this.lastStatus = 'Open a file from the Difference button to compare and merge changes.';
             this.compareResults = document.getElementById('fileList');
             this.compareResultsPreviousHeight = null;
@@ -863,13 +864,7 @@
         }
 
         getDefaultFocusPaneIndex(panes) {
-            const middle = Math.floor((panes.length - 1) / 2);
-            if (panes[middle]?.exists) {
-                return middle;
-            }
-
-            const existingIndex = panes.findIndex(pane => pane.exists);
-            return existingIndex === -1 ? 0 : existingIndex;
+            return 0;
         }
 
         cloneLineHints(lineHints) {
@@ -1036,6 +1031,7 @@
 
             const normalized = this.normalizeDescriptor(descriptor);
             const descriptorKey = this.getDescriptorKey(normalized);
+            const wasOpen = this.isOpen();
             let tab = this.tabs.find(existing => this.getDescriptorKey(existing.descriptor) === descriptorKey);
 
             if (tab) {
@@ -1044,6 +1040,14 @@
             } else {
                 tab = await this.loadTab(normalized);
                 this.tabs.push(tab);
+            }
+
+            if (!wasOpen) {
+                tab.paneScrollLefts = Array.from({ length: tab.panes.length }, () => 0);
+                this.pendingViewerOpenScrollReset = {
+                    tabId: tab.id,
+                    gridScrollLeft: 0
+                };
             }
 
             this.activeTabId = tab.id;
@@ -1438,8 +1442,17 @@
                 this.inlineEditor = null;
             }
             const tab = this.getActiveTab();
-            const previousTop = this.gridScroll ? this.gridScroll.scrollTop : 0;
-            const previousLeft = this.gridScroll ? this.gridScroll.scrollLeft : 0;
+            let previousTop = this.gridScroll ? this.gridScroll.scrollTop : 0;
+            let previousLeft = this.gridScroll ? this.gridScroll.scrollLeft : 0;
+            const shouldResetViewerOpenScroll = Boolean(
+                tab &&
+                this.pendingViewerOpenScrollReset &&
+                this.pendingViewerOpenScrollReset.tabId === tab.id
+            );
+
+            if (shouldResetViewerOpenScroll) {
+                previousLeft = this.pendingViewerOpenScrollReset.gridScrollLeft || 0;
+            }
 
             this.bodyEl.innerHTML = '';
             this.gridScroll = null;
@@ -1613,6 +1626,9 @@
                     this.renderVirtualRows(true);
                 }
             });
+            if (shouldResetViewerOpenScroll) {
+                this.pendingViewerOpenScrollReset = null;
+            }
 
             this.updateStatusForTab(tab);
             this.refreshSelectionVisuals();
