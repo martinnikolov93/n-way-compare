@@ -70,6 +70,19 @@
             this.pendingPaneScrollFrame = 0;
             this.isSyncingPaneScroll = false;
             this.gridScroll = null;
+            this.gridEl = null;
+            this.rowsHostEl = null;
+            this.headersContainerEl = null;
+            this.scrollbarRowEl = null;
+            this.activeTemplateColumns = '';
+            this.activeRenderedTabId = null;
+            this.visibleRowRange = null;
+            this.virtualRowHeight = 20;
+            this.virtualRowOverscan = 40;
+            this.selectionRepeatIntervalMs = 40;
+            this.pendingSelectionMove = null;
+            this.pendingSelectionMoveFrame = 0;
+            this.lastSelectionMoveAt = 0;
             this.dragSelection = null;
             this.inlineEditor = null;
             this.pendingRowReveal = null;
@@ -79,6 +92,7 @@
 
             this.build();
             document.addEventListener('keydown', this.handleKeyDown.bind(this));
+            document.addEventListener('keyup', this.handleKeyUp.bind(this));
             document.addEventListener('mousemove', this.handleGlobalMouseMove.bind(this));
             document.addEventListener('mouseup', this.handleGlobalMouseUp.bind(this));
         }
@@ -968,10 +982,15 @@
                 return;
             }
 
+            const wasDirty = tab.panes.some(pane => pane.dirty);
             history.redoStack.push(this.captureTabSnapshot(tab));
             const snapshot = history.undoStack.pop();
             this.restoreTabSnapshot(tab, snapshot);
-            this.render();
+            if (wasDirty !== tab.panes.some(pane => pane.dirty)) {
+                this.renderTabs();
+            }
+            this.renderActiveTab();
+            this.updateToolbarState();
         }
 
         redoActiveTab() {
@@ -987,10 +1006,15 @@
                 return;
             }
 
+            const wasDirty = tab.panes.some(pane => pane.dirty);
             history.undoStack.push(this.captureTabSnapshot(tab));
             const snapshot = history.redoStack.pop();
             this.restoreTabSnapshot(tab, snapshot);
-            this.render();
+            if (wasDirty !== tab.panes.some(pane => pane.dirty)) {
+                this.renderTabs();
+            }
+            this.renderActiveTab();
+            this.updateToolbarState();
         }
 
         eventMatchesShortcutKey(event, { keys = [], codes = [], keyCodes = [] }) {
@@ -1260,6 +1284,155 @@
             });
         }
 
+        resetVisibleRowsState(tab) {
+            this.rowElements = [];
+            this.cellElements = [];
+            this.codeScrollerElements = Array.from({ length: tab.panes.length }, () => []);
+            this.codeContentElements = Array.from({ length: tab.panes.length }, () => []);
+        }
+
+        createRowElement(tab, row, rowIndex) {
+            const rowEl = document.createElement('div');
+            const rowChanged = row.cells.some(cell => cell?.changedLeft || cell?.changedRight || cell?.missing);
+            rowEl.className = 'difference-row' +
+                (this.hunkStartSet?.has(rowIndex) ? ' is-change-start' : '') +
+                (rowChanged ? ' is-changed' : '');
+            rowEl.style.gridTemplateColumns = this.activeTemplateColumns;
+            this.cellElements[rowIndex] = [];
+
+            row.cells.forEach((cell, paneIndex) => {
+                const cellEl = document.createElement('div');
+                cellEl.className = 'difference-cell';
+                cellEl.dataset.rowIndex = String(rowIndex);
+                cellEl.dataset.paneIndex = String(paneIndex);
+                cellEl.style.minWidth = this.paneMinWidth + 'px';
+                cellEl.style.maxWidth = this.paneMaxWidth + 'px';
+
+                if (paneIndex === tab.focusPaneIndex) {
+                    cellEl.classList.add('is-active-pane');
+                }
+
+                if (tab.selection && tab.selection.paneIndex === paneIndex && rowIndex >= tab.selection.startRow && rowIndex <= tab.selection.endRow) {
+                    cellEl.classList.add('is-selected');
+                }
+
+                if (cell.changedLeft) {
+                    cellEl.classList.add('is-changed-left');
+                }
+
+                if (cell.changedRight) {
+                    cellEl.classList.add('is-changed-right');
+                }
+
+                if (cell.changedLeft || cell.changedRight || cell.missing) {
+                    cellEl.classList.add('is-diff-row');
+                }
+
+                if (cell.missing) {
+                    cellEl.classList.add('is-missing');
+                }
+
+                const gutter = document.createElement('div');
+                gutter.className = 'difference-gutter';
+                gutter.textContent = cell.lineNumber == null ? '' : String(cell.lineNumber);
+
+                const codeScroller = document.createElement('div');
+                codeScroller.className = 'difference-code-scroll';
+
+                const code = document.createElement('div');
+                code.className = 'difference-code' + (cell.missing ? ' is-placeholder' : '');
+                this.renderCodeContent(code, row, paneIndex);
+
+                cellEl.appendChild(gutter);
+                codeScroller.appendChild(code);
+                cellEl.appendChild(codeScroller);
+                rowEl.appendChild(cellEl);
+                this.cellElements[rowIndex][paneIndex] = cellEl;
+                this.codeScrollerElements[paneIndex].push(codeScroller);
+                this.codeContentElements[paneIndex].push(code);
+            });
+
+            this.rowElements[rowIndex] = rowEl;
+            return rowEl;
+        }
+
+        renderVirtualRows(force = false) {
+            const tab = this.getActiveTab();
+            if (!tab || !this.rowsHostEl || !this.gridScroll || !tab.rows.length) {
+                return;
+            }
+
+            const totalRows = tab.rows.length;
+            const headerHeight = this.headersContainerEl?.offsetHeight || 0;
+            const rowsTopOffset = this.rowsHostEl.offsetTop;
+            const scrollbarHeight = this.scrollbarRowEl?.offsetHeight || 0;
+            const currentTop = this.gridScroll.scrollTop;
+            const viewportHeight = this.gridScroll.clientHeight;
+            const relativeTop = Math.max(0, currentTop + headerHeight - rowsTopOffset);
+            const relativeBottom = Math.max(
+                relativeTop,
+                currentTop + viewportHeight - scrollbarHeight - rowsTopOffset
+            );
+            const startRow = clamp(
+                Math.floor(relativeTop / this.virtualRowHeight) - this.virtualRowOverscan,
+                0,
+                totalRows
+            );
+            const endRow = clamp(
+                Math.ceil(relativeBottom / this.virtualRowHeight) + this.virtualRowOverscan,
+                Math.max(startRow + 1, 1),
+                totalRows
+            );
+
+            if (
+                !force &&
+                this.visibleRowRange &&
+                this.visibleRowRange.tabId === tab.id &&
+                this.visibleRowRange.startRow === startRow &&
+                this.visibleRowRange.endRow === endRow
+            ) {
+                return;
+            }
+
+            this.visibleRowRange = {
+                tabId: tab.id,
+                startRow,
+                endRow
+            };
+
+            this.resetVisibleRowsState(tab);
+
+            const fragment = document.createDocumentFragment();
+            const topSpacer = document.createElement('div');
+            topSpacer.className = 'difference-row-spacer';
+            topSpacer.style.height = `${startRow * this.virtualRowHeight}px`;
+            fragment.appendChild(topSpacer);
+
+            for (let rowIndex = startRow; rowIndex < endRow; rowIndex += 1) {
+                fragment.appendChild(this.createRowElement(tab, tab.rows[rowIndex], rowIndex));
+            }
+
+            const bottomSpacer = document.createElement('div');
+            bottomSpacer.className = 'difference-row-spacer';
+            bottomSpacer.style.height = `${Math.max(0, (totalRows - endRow) * this.virtualRowHeight)}px`;
+            fragment.appendChild(bottomSpacer);
+
+            this.rowsHostEl.replaceChildren(fragment);
+            const measuredRowHeight = this.rowsHostEl.querySelector('.difference-row')?.offsetHeight || this.virtualRowHeight;
+            if (Math.abs(measuredRowHeight - this.virtualRowHeight) > 0.5) {
+                this.virtualRowHeight = measuredRowHeight;
+                this.visibleRowRange = null;
+                this.renderVirtualRows(true);
+                return;
+            }
+            this.refreshPaneScrollbarMetrics(tab);
+            this.restorePaneScrollPositions(tab);
+        }
+
+        handleGridScroll() {
+            this.renderVirtualRows();
+        }
+
         renderActiveTab() {
             if (this.inlineEditor) {
                 this.inlineEditor = null;
@@ -1270,6 +1443,14 @@
 
             this.bodyEl.innerHTML = '';
             this.gridScroll = null;
+            this.gridEl = null;
+            this.rowsHostEl = null;
+            this.headersContainerEl = null;
+            this.scrollbarRowEl = null;
+            this.activeTemplateColumns = '';
+            this.activeRenderedTabId = null;
+            this.visibleRowRange = null;
+            this.hunkStartSet = null;
             this.rowElements = [];
             this.cellElements = [];
             this.headerElements = [];
@@ -1303,6 +1484,7 @@
 
             const gridScroll = document.createElement('div');
             gridScroll.className = 'difference-grid-scroll';
+            gridScroll.addEventListener('scroll', () => this.handleGridScroll());
 
             const grid = document.createElement('div');
             grid.className = 'difference-grid';
@@ -1363,6 +1545,7 @@
             });
 
             grid.appendChild(headers);
+            this.headersContainerEl = headers;
 
             if (!tab.rows.length) {
                 const empty = document.createElement('div');
@@ -1370,83 +1553,11 @@
                 empty.textContent = 'All compared files are empty.';
                 grid.appendChild(empty);
             } else {
-                const hunkStartSet = new Set(tab.hunks.map(hunk => hunk.start));
-
-                tab.rows.forEach((row, rowIndex) => {
-                    const rowEl = document.createElement('div');
-                    const rowChanged = row.cells.some(cell => cell?.changedLeft || cell?.changedRight || cell?.missing);
-                    rowEl.className = 'difference-row' +
-                        (hunkStartSet.has(rowIndex) ? ' is-change-start' : '') +
-                        (rowChanged ? ' is-changed' : '');
-                    rowEl.style.gridTemplateColumns = templateColumns;
-                    this.cellElements[rowIndex] = [];
-
-                    row.cells.forEach((cell, paneIndex) => {
-                        const cellEl = document.createElement('div');
-                        cellEl.className = 'difference-cell';
-                        cellEl.dataset.rowIndex = String(rowIndex);
-                        cellEl.dataset.paneIndex = String(paneIndex);
-                        cellEl.style.minWidth = this.paneMinWidth + 'px';
-                        cellEl.style.maxWidth = this.paneMaxWidth + 'px';
-
-                        if (paneIndex === tab.focusPaneIndex) {
-                            cellEl.classList.add('is-active-pane');
-                        }
-
-                        if (tab.selection && tab.selection.paneIndex === paneIndex && rowIndex >= tab.selection.startRow && rowIndex <= tab.selection.endRow) {
-                            cellEl.classList.add('is-selected');
-                        }
-
-                        if (cell.changedLeft) {
-                            cellEl.classList.add('is-changed-left');
-                        }
-
-                        if (cell.changedRight) {
-                            cellEl.classList.add('is-changed-right');
-                        }
-
-                        if (cell.changedLeft || cell.changedRight || cell.missing) {
-                            cellEl.classList.add('is-diff-row');
-                        }
-
-                        if (cell.missing) {
-                            cellEl.classList.add('is-missing');
-                        }
-
-                        const gutter = document.createElement('div');
-                        gutter.className = 'difference-gutter';
-                        gutter.textContent = cell.lineNumber == null ? '' : String(cell.lineNumber);
-
-                        const codeScroller = document.createElement('div');
-                        codeScroller.className = 'difference-code-scroll';
-
-                        const code = document.createElement('div');
-                        code.className = 'difference-code' + (cell.missing ? ' is-placeholder' : '');
-                        this.renderCodeContent(code, row, paneIndex);
-
-                        cellEl.appendChild(gutter);
-                        codeScroller.appendChild(code);
-                        cellEl.appendChild(codeScroller);
-                        rowEl.appendChild(cellEl);
-                        this.cellElements[rowIndex][paneIndex] = cellEl;
-                        if (!this.codeScrollerElements[paneIndex]) {
-                            this.codeScrollerElements[paneIndex] = [];
-                        }
-                        this.codeScrollerElements[paneIndex].push(codeScroller);
-                        if (!this.codeContentElements[paneIndex]) {
-                            this.codeContentElements[paneIndex] = [];
-                        }
-                        this.codeContentElements[paneIndex].push(code);
-                    });
-
-                    grid.appendChild(rowEl);
-                    this.rowElements[rowIndex] = rowEl;
-                });
-
-                const filler = document.createElement('div');
-                filler.className = 'difference-row-filler';
-                filler.style.marginTop = '0';
-                grid.appendChild(filler);
+                this.hunkStartSet = new Set(tab.hunks.map(hunk => hunk.start));
+                const rowsHost = document.createElement('div');
+                rowsHost.className = 'difference-rows-host';
+                grid.appendChild(rowsHost);
+                this.rowsHostEl = rowsHost;
 
                 const scrollbarRow = document.createElement('div');
                 scrollbarRow.className = 'difference-pane-scrollbars';
@@ -1473,6 +1584,7 @@
                 });
 
                 grid.appendChild(scrollbarRow);
+                this.scrollbarRowEl = scrollbarRow;
             }
 
             gridScroll.appendChild(grid);
@@ -1480,16 +1592,25 @@
             this.bodyEl.appendChild(compare);
 
             this.gridScroll = gridScroll;
+            this.gridEl = grid;
+            this.activeTemplateColumns = templateColumns;
+            this.activeRenderedTabId = tab.id;
+            this.renderVirtualRows(true);
+            if (this.gridScroll) {
+                this.gridScroll.scrollTop = previousTop;
+                this.gridScroll.scrollLeft = previousLeft;
+            }
+            this.renderVirtualRows(true);
             requestAnimationFrame(() => {
                 if (this.gridScroll) {
                     this.gridScroll.scrollTop = previousTop;
                     this.gridScroll.scrollLeft = previousLeft;
+                    this.renderVirtualRows(true);
                 }
-                this.refreshPaneScrollbarMetrics(tab);
-                this.restorePaneScrollPositions(tab);
                 if (pendingRowReveal) {
                     this.pendingRowReveal = null;
                     this.scrollToRow(pendingRowReveal.rowIndex, pendingRowReveal.options);
+                    this.renderVirtualRows(true);
                 }
             });
 
@@ -1916,6 +2037,7 @@
         }
 
         applyReplacement(tab, paneIndex, startRow, endRow, replacementLines, description) {
+            const wasDirty = tab.panes.some(pane => pane.dirty);
             this.pushUndoSnapshot(tab);
             const currentPane = tab.panes[paneIndex];
             tab.panes[paneIndex] = {
@@ -1923,6 +2045,7 @@
                 savedContent: currentPane.savedContent || '',
                 savedExists: Boolean(currentPane.savedExists)
             };
+            tab.focusPaneIndex = clamp(paneIndex, 0, Math.max(0, tab.panes.length - 1));
             this.syncTabDirtyState(tab);
             window.DifferenceEngine.rebuildTab(tab);
 
@@ -1946,7 +2069,11 @@
             if (this.pendingRowReveal?.tabId === tab.id) {
                 this.pendingRowReveal = null;
             }
-            this.render();
+            if (wasDirty !== tab.panes.some(pane => pane.dirty)) {
+                this.renderTabs();
+            }
+            this.renderActiveTab();
+            this.updateToolbarState();
         }
 
         copySelectionToNeighbor(direction) {
@@ -2071,8 +2198,7 @@
         }
 
         scrollToRow(rowIndex, options = {}) {
-            const rowEl = this.rowElements[rowIndex];
-            if (!rowEl || !this.gridScroll) {
+            if (!this.gridScroll) {
                 return;
             }
 
@@ -2080,29 +2206,51 @@
             const block = options.block || 'center';
             const currentTop = this.gridScroll.scrollTop;
             const viewportHeight = this.gridScroll.clientHeight;
-            const containerRect = this.gridScroll.getBoundingClientRect();
-            const headerRect = this.bodyEl.querySelector('.difference-pane-headers')?.getBoundingClientRect() || null;
-            const scrollbarRect = this.bodyEl.querySelector('.difference-pane-scrollbars')?.getBoundingClientRect() || null;
-            const rowRect = rowEl.getBoundingClientRect();
-            const safeTop = headerRect ? headerRect.bottom : containerRect.top;
-            const safeBottom = scrollbarRect ? scrollbarRect.top : containerRect.bottom;
-            const rowHeight = rowRect.height || rowEl.offsetHeight || 0;
+            const headerHeight = this.headersContainerEl?.offsetHeight || 0;
+            const scrollbarHeight = this.scrollbarRowEl?.offsetHeight || 0;
+            const rowsTopOffset = this.rowsHostEl?.offsetTop || 0;
+            const rowHeight = this.virtualRowHeight;
+            const rowTop = rowIndex * rowHeight;
+            const rowBottom = rowTop + rowHeight;
+            const visibleTop = Math.max(0, currentTop + headerHeight - rowsTopOffset);
+            const visibleBottom = Math.max(
+                visibleTop,
+                currentTop + viewportHeight - scrollbarHeight - rowsTopOffset
+            );
+            const visibleRowsHeight = Math.max(rowHeight, visibleBottom - visibleTop);
+            const renderedRowEl = this.rowElements[rowIndex];
 
             let nextTop = currentTop;
 
-            if (block === 'nearest') {
-                if (rowRect.top < safeTop) {
-                    nextTop = currentTop + (rowRect.top - safeTop);
-                } else if (rowRect.bottom > safeBottom) {
-                    nextTop = currentTop + (rowRect.bottom - safeBottom);
+            if (block === 'nearest' && renderedRowEl?.isConnected) {
+                const gridRect = this.gridScroll.getBoundingClientRect();
+                const headerRect = this.headersContainerEl?.getBoundingClientRect();
+                const scrollbarRect = this.scrollbarRowEl?.getBoundingClientRect();
+                const rowRect = renderedRowEl.getBoundingClientRect();
+                const visibleTopPx = headerRect
+                    ? Math.max(gridRect.top, headerRect.bottom)
+                    : gridRect.top;
+                const visibleBottomPx = scrollbarRect
+                    ? Math.min(gridRect.bottom, scrollbarRect.top)
+                    : gridRect.bottom;
+
+                if (rowRect.top < visibleTopPx) {
+                    nextTop = currentTop - (visibleTopPx - rowRect.top);
+                } else if (rowRect.bottom > visibleBottomPx) {
+                    nextTop = currentTop + (rowRect.bottom - visibleBottomPx);
+                } else {
+                    return;
+                }
+            } else if (block === 'nearest') {
+                if (rowTop < visibleTop) {
+                    nextTop = rowTop - headerHeight + rowsTopOffset;
+                } else if (rowBottom > visibleBottom) {
+                    nextTop = rowBottom - viewportHeight + scrollbarHeight + rowsTopOffset;
                 } else {
                     return;
                 }
             } else {
-                const visibleHeight = Math.max(0, safeBottom - safeTop);
-                const targetCenter = safeTop + (visibleHeight / 2);
-                const rowCenter = rowRect.top + (rowHeight / 2);
-                nextTop = currentTop + (rowCenter - targetCenter);
+                nextTop = rowTop - Math.max(0, (visibleRowsHeight - rowHeight) / 2) - headerHeight + rowsTopOffset;
             }
 
             const maxTop = Math.max(0, this.gridScroll.scrollHeight - viewportHeight);
@@ -2110,6 +2258,47 @@
                 top: clamp(Math.round(nextTop), 0, maxTop),
                 behavior
             });
+        }
+
+        clearPendingSelectionMove() {
+            this.pendingSelectionMove = null;
+            if (this.pendingSelectionMoveFrame) {
+                cancelAnimationFrame(this.pendingSelectionMoveFrame);
+                this.pendingSelectionMoveFrame = 0;
+            }
+        }
+
+        flushPendingSelectionMove() {
+            this.pendingSelectionMoveFrame = 0;
+
+            if (!this.pendingSelectionMove) {
+                return;
+            }
+
+            if (performance.now() - this.lastSelectionMoveAt < this.selectionRepeatIntervalMs) {
+                this.pendingSelectionMoveFrame = requestAnimationFrame(() => this.flushPendingSelectionMove());
+                return;
+            }
+
+            const pendingMove = this.pendingSelectionMove;
+            this.pendingSelectionMove = null;
+            this.moveSelectionRow(pendingMove.direction, pendingMove.extendSelection);
+            this.lastSelectionMoveAt = performance.now();
+        }
+
+        queueSelectionMove(direction, extendSelection = false, isRepeat = false) {
+            if (!isRepeat) {
+                this.clearPendingSelectionMove();
+                this.moveSelectionRow(direction, extendSelection);
+                this.lastSelectionMoveAt = performance.now();
+                return;
+            }
+
+            this.pendingSelectionMove = { direction, extendSelection };
+
+            if (!this.pendingSelectionMoveFrame) {
+                this.pendingSelectionMoveFrame = requestAnimationFrame(() => this.flushPendingSelectionMove());
+            }
         }
 
         moveFocusPane(direction) {
@@ -2197,6 +2386,12 @@
             this.scrollToRow(targetRow, { behavior: 'auto', block: 'nearest' });
         }
 
+        handleKeyUp(event) {
+            if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+                this.clearPendingSelectionMove();
+            }
+        }
+
         handleKeyDown(event) {
             if (!this.isOpen()) {
                 return;
@@ -2239,13 +2434,13 @@
             if (!event.ctrlKey && !event.altKey && !event.metaKey) {
                 if (event.shiftKey && event.key === 'ArrowUp') {
                     event.preventDefault();
-                    this.moveSelectionRow(-1, true);
+                    this.queueSelectionMove(-1, true, event.repeat);
                     return;
                 }
 
                 if (event.shiftKey && event.key === 'ArrowDown') {
                     event.preventDefault();
-                    this.moveSelectionRow(1, true);
+                    this.queueSelectionMove(1, true, event.repeat);
                     return;
                 }
 
@@ -2271,13 +2466,13 @@
 
                 if (event.key === 'ArrowUp') {
                     event.preventDefault();
-                    this.moveSelectionRow(-1);
+                    this.queueSelectionMove(-1, false, event.repeat);
                     return;
                 }
 
                 if (event.key === 'ArrowDown') {
                     event.preventDefault();
-                    this.moveSelectionRow(1);
+                    this.queueSelectionMove(1, false, event.repeat);
                     return;
                 }
             }

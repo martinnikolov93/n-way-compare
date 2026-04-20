@@ -430,6 +430,14 @@
   margin-top: 0;
 }
 
+.difference-rows-host {
+  min-width: 100%;
+}
+
+.difference-row-spacer {
+  height: 0;
+}
+
 .difference-cell {
   display: grid;
   grid-template-columns: 38px minmax(220px, 1fr);

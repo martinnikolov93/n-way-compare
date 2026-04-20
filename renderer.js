@@ -126,6 +126,14 @@ function setScanLoading(isLoading) {
     loader.classList.toggle('is-visible', isLoading);
 }
 
+function waitForNextPaint() {
+    return new Promise(resolve => {
+        requestAnimationFrame(() => {
+            requestAnimationFrame(resolve);
+        });
+    });
+}
+
 function rebuildRenderCaches() {
     currentTree = groupFiles();
     currentDiffCache = new Map();
@@ -1788,6 +1796,12 @@ async function loadConfig() {
         }
 
         setFolderInputs(data);
+
+        if (getDirs().length >= 2) {
+            setScanLoading(true);
+            await waitForNextPaint();
+            await scan(true);
+        }
     } catch (err) {
         alert('Error loading config: ' + err.message);
     }
