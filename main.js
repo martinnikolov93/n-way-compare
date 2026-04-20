@@ -3,32 +3,6 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { exec } = require('child_process');
-const TRACE_LOG_PATH = path.join(__dirname, 'scan-trace.log');
-
-try {
-    fs.writeFileSync(TRACE_LOG_PATH, '');
-} catch {
-    // Best-effort trace reset.
-}
-
-appendTraceLine('trace-session-start', { pid: process.pid });
-
-function appendTraceLine(stage, payload = {}) {
-    const line = `[${new Date().toISOString()}] ${stage} ${JSON.stringify(payload)}\n`;
-
-    fs.appendFile(TRACE_LOG_PATH, line, () => {});
-    console.log(line.trimEnd());
-}
-
-function summarizeDirtyRoots(state) {
-    return (state?.dirtyRootsByDir || [])
-        .map((dirtyRoots, dirIndex) => ({
-            dirIndex,
-            count: dirtyRoots.size,
-            roots: Array.from(dirtyRoots).slice(0, 5)
-        }))
-        .filter(item => item.count > 0);
-}
 
 function createWindow() {
     const win = new BrowserWindow({
@@ -197,8 +171,6 @@ function watchFolders(folders) {
         folderWatcher.close();
     }
 
-    appendTraceLine('watch-start', { folderCount: folders.length });
-
     folderWatcher = chokidar.watch(folders, {
         ignoreInitial: true,
         persistent: true,
@@ -214,9 +186,7 @@ function watchFolders(folders) {
             scanTimeout = null;
         }
 
-        const burstDurationMs = burstStartedAt ? Date.now() - burstStartedAt : 0;
         burstStartedAt = 0;
-        appendTraceLine('watcher-flush', { burstDurationMs });
 
         BrowserWindow.getAllWindows().forEach(win => {
             win.webContents.send('folder-changed');
@@ -247,23 +217,10 @@ function watchFolders(folders) {
         const ignoreReason = getWatcherIgnoreReason(event, changedPath, folders);
 
         if (ignoreReason) {
-            appendTraceLine('watcher-ignore', { event, changedPath, reason: ignoreReason });
             return;
         }
 
-        appendTraceLine('watcher-event', {
-            event,
-            changedPath,
-            dirtyBefore: summarizeDirtyRoots(activeScanState)
-        });
-
         markPathDirty(changedPath);
-
-        appendTraceLine('watcher-dirty', {
-            event,
-            changedPath,
-            dirtyAfter: summarizeDirtyRoots(activeScanState)
-        });
 
         triggerScan();
     });
@@ -271,10 +228,6 @@ function watchFolders(folders) {
 
 ipcMain.handle('watch-folders', async (e, folders) => {
     watchFolders(folders);
-});
-
-ipcMain.on('trace-log', (event, payload) => {
-    appendTraceLine(`renderer-${payload?.stage || 'unknown'}`, payload?.data || {});
 });
 
 function hashFile(filePath) {
@@ -549,9 +502,7 @@ function applyDirtyUpdates(state) {
 }
 
 function scanDirs(baseDirs) {
-    const startedAt = Date.now();
     const signature = getDirsSignature(baseDirs);
-    const dirtyBefore = summarizeDirtyRoots(activeScanState);
 
     if (!activeScanState || activeScanState.signature !== signature) {
         activeScanState = createScanState(baseDirs);
@@ -559,42 +510,19 @@ function scanDirs(baseDirs) {
 
     if (!activeScanState.initialized) {
         performFullScan(activeScanState);
-        const result = {
+        return {
             mode: 'full',
             data: activeScanState.map
         };
-        appendTraceLine('scan-main', {
-            mode: result.mode,
-            durationMs: Date.now() - startedAt,
-            dirtyBefore,
-            entryCount: Object.keys(activeScanState.map).length
-        });
-        return result;
     }
 
     if (!hasPendingDirtyUpdates(activeScanState)) {
-        const result = {
+        return {
             mode: 'noop'
         };
-        appendTraceLine('scan-main', {
-            mode: result.mode,
-            durationMs: Date.now() - startedAt,
-            dirtyBefore
-        });
-        return result;
     }
 
-    const result = applyDirtyUpdates(activeScanState);
-    appendTraceLine('scan-main', {
-        mode: result.mode,
-        durationMs: Date.now() - startedAt,
-        dirtyBefore,
-        dirtyAfter: summarizeDirtyRoots(activeScanState),
-        impactedCount: result.mode === 'patch'
-            ? Object.keys(result.upserts || {}).length + (result.removals || []).length
-            : Object.keys(result.data || {}).length
-    });
-    return result;
+    return applyDirtyUpdates(activeScanState);
 }
 
 ipcMain.handle('load-config', async () => {

@@ -20,20 +20,6 @@ const COMPARE_LAYOUT = Object.freeze({
     actionsWidth: 352
 });
 
-function roundTraceMs(value) {
-    return Math.round(value * 10) / 10;
-}
-
-function emitTrace(stage, data = {}) {
-    window.api?.traceLog?.({
-        stage,
-        data: {
-            ...data,
-            timestampMs: roundTraceMs(performance.now())
-        }
-    });
-}
-
 function arraysEqual(a, b) {
     return a.length === b.length && a.every((value, index) => value === b[index]);
 }
@@ -240,29 +226,17 @@ function scheduleStatsRefresh() {
     }
 
     statsRefreshTimer = setTimeout(() => {
-        const startedAt = performance.now();
         statsRefreshTimer = null;
 
         if (!currentTree) {
             currentStats = { folders: 0, files: 0, diffs: 0 };
             activeRenderController?.refreshMeta?.();
-            emitTrace('stats-refresh', {
-                emptyTree: true,
-                durationMs: roundTraceMs(performance.now() - startedAt)
-            });
             return;
         }
 
         currentDiffCache = new Map();
         currentStats = collectTreeStats(currentTree, currentDiffCache);
         activeRenderController?.refreshMeta?.();
-        emitTrace('stats-refresh', {
-            emptyTree: false,
-            durationMs: roundTraceMs(performance.now() - startedAt),
-            folders: currentStats.folders,
-            files: currentStats.files,
-            diffs: currentStats.diffs
-        });
     }, 120);
 }
 
@@ -358,10 +332,8 @@ function applyIncrementalScanResult(scanResult) {
 }
 
 async function performScan(resetCache = false) {
-    const scanStartedAt = performance.now();
     ensurePreservedScrollState();
     setScanLoading(true);
-    emitTrace('scan-start', { resetCache });
 
     try {
         dirs = getDirs();
@@ -374,18 +346,9 @@ async function performScan(resetCache = false) {
             Object.keys(collapseState).forEach(key => delete collapseState[key]);
         }
 
-        const ipcStartedAt = performance.now();
         const scanResult = await window.api.scan(dirs);
-        const ipcDurationMs = roundTraceMs(performance.now() - ipcStartedAt);
         const scanUpdate = applyIncrementalScanResult(scanResult);
         const shouldRender = scanUpdate.changed || resetCache;
-        emitTrace('scan-result', {
-            resetCache,
-            mode: scanUpdate.mode,
-            changed: scanUpdate.changed,
-            impactedCount: scanUpdate.impactedPaths.length,
-            ipcDurationMs
-        });
 
         if (shouldRender) {
             const canUsePatchRender = !resetCache &&
@@ -400,9 +363,6 @@ async function performScan(resetCache = false) {
                 const didPartialRender = activeRenderController.rerenderPaths(scanUpdate.impactedPaths);
 
                 if (!didPartialRender) {
-                    emitTrace('patch-fallback-full-render', {
-                        impactedPaths: scanUpdate.impactedPaths.slice(0, 12)
-                    });
                     rebuildRenderCaches();
                     render();
                 }
@@ -418,20 +378,8 @@ async function performScan(resetCache = false) {
             window.api.watchFolders(dirs);
             lastWatchedDirs = [...dirs];
         }
-
-        emitTrace('scan-end', {
-            resetCache,
-            mode: scanUpdate.mode,
-            shouldRender,
-            durationMs: roundTraceMs(performance.now() - scanStartedAt)
-        });
     } catch (err) {
         preservedScrollState = null;
-        emitTrace('scan-error', {
-            resetCache,
-            message: err.message,
-            durationMs: roundTraceMs(performance.now() - scanStartedAt)
-        });
         alert('Scan error: ' + err.message);
     } finally {
         setScanLoading(false);
@@ -463,7 +411,6 @@ function scan(resetCache = false) {
 }
 
 window.api.onFolderChange(() => {
-    emitTrace('folder-change-received');
     scan();
 });
 
@@ -1671,14 +1618,10 @@ function render() {
                 return false;
             }
 
-            const rerenderStartedAt = performance.now();
             const patchScrollState = preservedScrollState;
             const targetContentNodeIds = new Set();
             const headerNodeIds = new Set();
             let didWork = false;
-            let fileRowUpdates = 0;
-            let folderSectionUpdates = 0;
-            let subtreeUpdates = 0;
 
             impactedPaths.forEach(relativePath => {
                 const normalizedPath = normalizeDataPath(relativePath);
@@ -1692,10 +1635,8 @@ function render() {
                     // Ignore transient temp-file paths that were never rendered.
                 } else if (isFileEntry && this.rerenderFileRow(normalizedPath)) {
                     didWork = true;
-                    fileRowUpdates += 1;
                 } else if (isFolderEntry && this.rerenderFolderSection(normalizedPath)) {
                     didWork = true;
-                    folderSectionUpdates += 1;
                 } else {
                     targetContentNodeIds.add(parentNodeId);
                 }
@@ -1715,7 +1656,6 @@ function render() {
                 .forEach(nodeId => {
                 if (this.rerenderFolderContent(nodeId)) {
                     didWork = true;
-                    subtreeUpdates += 1;
                 }
             });
 
@@ -1733,15 +1673,6 @@ function render() {
 
             this.refreshMeta();
             restoreRenderScrollState(patchScrollState);
-            emitTrace('patch-render', {
-                impactedPaths: impactedPaths.slice(0, 12),
-                rootTouched: targetContentNodeIds.has('root') || impactedPaths.some(path => !normalizeDataPath(path).includes('/')),
-                fileRowUpdates,
-                folderSectionUpdates,
-                subtreeUpdates,
-                headerUpdates: headerNodeIds.size,
-                durationMs: roundTraceMs(performance.now() - rerenderStartedAt)
-            });
             return true;
         }
     };
