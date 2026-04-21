@@ -309,8 +309,10 @@ function New-AppIconBitmap {
     $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
     $graphics.Clear([System.Drawing.Color]::Transparent)
 
-    if ($Size -lt 48) {
-        Draw-SmallAppIcon -Graphics $graphics -Palette $palette -Size $Size
+    if ($Size -lt 128) {
+        $smallIcon = New-InstallerIconBitmap -Size $Size
+        $graphics.DrawImage($smallIcon, [System.Drawing.Rectangle]::new(0, 0, $Size, $Size))
+        $smallIcon.Dispose()
         $graphics.Dispose()
         return $bitmap
     }
@@ -441,6 +443,24 @@ function Get-PngBytes {
     return $bytes
 }
 
+function Resize-Bitmap {
+    param(
+        [System.Drawing.Bitmap]$Source,
+        [int]$Size
+    )
+
+    $bitmap = New-Object System.Drawing.Bitmap($Size, $Size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+    $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+    $graphics.Clear([System.Drawing.Color]::Transparent)
+    $graphics.DrawImage($Source, [System.Drawing.Rectangle]::new(0, 0, $Size, $Size))
+    $graphics.Dispose()
+
+    return $bitmap
+}
+
 function Save-Ico {
     param(
         [string]$Path,
@@ -499,9 +519,10 @@ $masterBitmap = New-AppIconBitmap -Size 1024
 Save-Png -Bitmap $masterBitmap -Path $pngPath
 $masterBitmap.Dispose()
 
+$appIcoSourceBitmap = New-AppIconBitmap -Size 128
 $icoImages = @()
 foreach ($iconSize in @(16, 24, 32, 48, 64, 128, 256)) {
-    $icoBitmap = New-AppIconBitmap -Size $iconSize
+    $icoBitmap = Resize-Bitmap -Source $appIcoSourceBitmap -Size $iconSize
     $icoBytes = Get-PngBytes -Bitmap $icoBitmap
     $icoBitmap.Dispose()
 
@@ -510,6 +531,7 @@ foreach ($iconSize in @(16, 24, 32, 48, 64, 128, 256)) {
         Bytes = $icoBytes
     }
 }
+$appIcoSourceBitmap.Dispose()
 
 Save-Ico -Path $icoPath -Images $icoImages
 
