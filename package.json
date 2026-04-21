@@ -1,6 +1,6 @@
 {
   "name": "n-way-compare",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -31,7 +31,8 @@
       "uninstallerIcon": "assets/installer-icon.ico",
       "installerHeader": "assets/installer-header.bmp",
       "installerSidebar": "assets/installer-sidebar.bmp",
-      "uninstallerSidebar": "assets/installer-sidebar.bmp"
+      "uninstallerSidebar": "assets/installer-sidebar.bmp",
+      "artifactName": "N-Way-Compare-Setup-${version}.${ext}"
     },
     "files": [
       "**/*",

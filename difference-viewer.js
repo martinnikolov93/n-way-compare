@@ -1615,21 +1615,26 @@
             const ratios = this.getVisibleOverviewRatios(tab);
             const viewportRatio = Math.max(0, ratios.end - ratios.start);
             const trackHeight = this.overviewTrackEl?.clientHeight || 0;
+            const scrollRange = this.gridScroll
+                ? Math.max(0, this.gridScroll.scrollHeight - this.gridScroll.clientHeight)
+                : 0;
+            const scrollProgress = scrollRange > 0
+                ? clamp(this.gridScroll.scrollTop / scrollRange, 0, 1)
+                : 0;
 
             if (trackHeight > 0) {
-                const rawViewportTop = ratios.start * trackHeight;
                 const rawViewportHeight = viewportRatio * trackHeight;
                 const viewportHeight = Math.min(trackHeight, Math.max(6, rawViewportHeight));
-                const viewportCenter = ((ratios.start + ratios.end) / 2) * trackHeight;
-                const viewportTop = rawViewportHeight >= viewportHeight
-                    ? clamp(rawViewportTop, 0, Math.max(0, trackHeight - viewportHeight))
-                    : clamp(viewportCenter - (viewportHeight / 2), 0, Math.max(0, trackHeight - viewportHeight));
+                const viewportTravel = Math.max(0, trackHeight - viewportHeight);
+                const viewportTop = scrollProgress * viewportTravel;
 
                 this.overviewViewportEl.style.top = Math.round(viewportTop) + 'px';
                 this.overviewViewportEl.style.height = Math.round(viewportHeight) + 'px';
+                this.overviewViewportEl.style.transform = 'none';
             } else {
-                this.overviewViewportEl.style.top = (ratios.start * 100).toFixed(4) + '%';
+                this.overviewViewportEl.style.top = (scrollProgress * 100).toFixed(4) + '%';
                 this.overviewViewportEl.style.height = `max(6px, ${(viewportRatio * 100).toFixed(4)}%)`;
+                this.overviewViewportEl.style.transform = `translateY(-${(scrollProgress * 100).toFixed(4)}%)`;
             }
 
             this.overviewEl.setAttribute('aria-valuenow', String(ratios.currentRow));
