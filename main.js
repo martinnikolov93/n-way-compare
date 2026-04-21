@@ -1,8 +1,13 @@
 ﻿const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { exec } = require('child_process');
+
+let mainWindow = null;
+let updatePromptOpen = false;
+let updateDownloadInProgress = false;
 
 function createWindow() {
     const win = new BrowserWindow({
@@ -15,9 +20,118 @@ function createWindow() {
     });
 
     win.loadFile('index.html');
+    mainWindow = win;
+
+    win.on('closed', () => {
+        if (mainWindow === win) {
+            mainWindow = null;
+        }
+    });
 }
 
-app.whenReady().then(createWindow);
+function getUpdateDialogWindow() {
+    return mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+}
+
+function showUpdateMessage(options) {
+    const ownerWindow = getUpdateDialogWindow();
+    return ownerWindow
+        ? dialog.showMessageBox(ownerWindow, options)
+        : dialog.showMessageBox(options);
+}
+
+function formatUpdateVersion(info = {}) {
+    return info.version ? `v${info.version}` : 'the latest version';
+}
+
+function setUpdateProgress(value) {
+    const ownerWindow = getUpdateDialogWindow();
+
+    if (ownerWindow) {
+        ownerWindow.setProgressBar(value);
+    }
+}
+
+function configureAutoUpdater() {
+    if (!app.isPackaged) {
+        return;
+    }
+
+    autoUpdater.autoDownload = false;
+    autoUpdater.autoInstallOnAppQuit = false;
+
+    autoUpdater.on('update-available', async info => {
+        if (updatePromptOpen || updateDownloadInProgress) {
+            return;
+        }
+
+        updatePromptOpen = true;
+
+        try {
+            const result = await showUpdateMessage({
+                type: 'info',
+                buttons: ['Update now', 'Later'],
+                defaultId: 0,
+                cancelId: 1,
+                title: 'Update available',
+                message: `N-Way Compare ${formatUpdateVersion(info)} is available.`,
+                detail: `You are currently using v${app.getVersion()}.\n\nIf you update now, the app will download the latest installer and restart to complete the update.`
+            });
+
+            if (result.response !== 0) {
+                return;
+            }
+
+            updateDownloadInProgress = true;
+            setUpdateProgress(2);
+            autoUpdater.downloadUpdate();
+        } finally {
+            updatePromptOpen = false;
+        }
+    });
+
+    autoUpdater.on('download-progress', progress => {
+        if (typeof progress?.percent === 'number') {
+            setUpdateProgress(Math.max(0, Math.min(1, progress.percent / 100)));
+        }
+    });
+
+    autoUpdater.on('update-downloaded', () => {
+        updateDownloadInProgress = false;
+        setUpdateProgress(-1);
+        autoUpdater.quitAndInstall(false, true);
+    });
+
+    autoUpdater.on('error', async err => {
+        const shouldNotify = updateDownloadInProgress;
+        updateDownloadInProgress = false;
+        setUpdateProgress(-1);
+
+        if (!shouldNotify) {
+            console.error('Update check failed:', err);
+            return;
+        }
+
+        await showUpdateMessage({
+            type: 'error',
+            buttons: ['OK'],
+            title: 'Update failed',
+            message: 'N-Way Compare could not complete the update.',
+            detail: err?.message || String(err)
+        });
+    });
+
+    setTimeout(() => {
+        autoUpdater.checkForUpdates().catch(err => {
+            console.error('Update check failed:', err);
+        });
+    }, 1500);
+}
+
+app.whenReady().then(() => {
+    createWindow();
+    configureAutoUpdater();
+});
 
 const chokidar = require('chokidar');
 let folderWatcher = null;

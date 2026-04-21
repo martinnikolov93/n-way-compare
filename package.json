@@ -10,6 +10,14 @@
   "build": {
     "appId": "com.your.nwaycompare",
     "productName": "N-Way Compare",
+    "electronUpdaterCompatibility": ">=2.16",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "martinnikolov93",
+        "repo": "n-way-compare"
+      }
+    ],
     "win": {
       "icon": "assets/app-icon.ico",
       "target": "nsis"
@@ -41,6 +49,7 @@
     "electron-builder": "^24.13.3"
   },
   "dependencies": {
-    "chokidar": "^3.6.0"
+    "chokidar": "^3.6.0",
+    "electron-updater": "^6.8.3"
   }
 }
