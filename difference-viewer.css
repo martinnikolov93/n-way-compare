@@ -733,7 +733,7 @@
   right: -1px;
   z-index: 5;
   box-sizing: border-box;
-  min-height: 28px;
+  min-height: 6px;
   background: rgba(143, 146, 221, 0.24);
   border: 1px solid rgba(83, 85, 157, 0.72);
   box-shadow:

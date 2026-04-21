@@ -1617,18 +1617,19 @@
             const trackHeight = this.overviewTrackEl?.clientHeight || 0;
 
             if (trackHeight > 0) {
-                const viewportHeight = Math.min(trackHeight, Math.max(28, viewportRatio * trackHeight));
-                const maxScrollTop = Math.max(0, this.gridScroll.scrollHeight - this.gridScroll.clientHeight);
-                const scrollProgress = maxScrollTop > 0
-                    ? clamp(this.gridScroll.scrollTop / maxScrollTop, 0, 1)
-                    : 0;
-                const viewportTop = scrollProgress * Math.max(0, trackHeight - viewportHeight);
+                const rawViewportTop = ratios.start * trackHeight;
+                const rawViewportHeight = viewportRatio * trackHeight;
+                const viewportHeight = Math.min(trackHeight, Math.max(6, rawViewportHeight));
+                const viewportCenter = ((ratios.start + ratios.end) / 2) * trackHeight;
+                const viewportTop = rawViewportHeight >= viewportHeight
+                    ? clamp(rawViewportTop, 0, Math.max(0, trackHeight - viewportHeight))
+                    : clamp(viewportCenter - (viewportHeight / 2), 0, Math.max(0, trackHeight - viewportHeight));
 
                 this.overviewViewportEl.style.top = Math.round(viewportTop) + 'px';
                 this.overviewViewportEl.style.height = Math.round(viewportHeight) + 'px';
             } else {
                 this.overviewViewportEl.style.top = (ratios.start * 100).toFixed(4) + '%';
-                this.overviewViewportEl.style.height = `max(28px, ${(viewportRatio * 100).toFixed(4)}%)`;
+                this.overviewViewportEl.style.height = `max(6px, ${(viewportRatio * 100).toFixed(4)}%)`;
             }
 
             this.overviewEl.setAttribute('aria-valuenow', String(ratios.currentRow));
