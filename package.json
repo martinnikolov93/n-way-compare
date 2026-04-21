@@ -19,15 +19,20 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "installerIcon": "assets/app-icon.ico",
-      "uninstallerIcon": "assets/app-icon.ico"
+      "installerIcon": "assets/installer-icon.ico",
+      "uninstallerIcon": "assets/installer-icon.ico",
+      "installerHeader": "assets/installer-header.bmp",
+      "installerSidebar": "assets/installer-sidebar.bmp",
+      "uninstallerSidebar": "assets/installer-sidebar.bmp"
     },
     "files": [
       "**/*",
       "!dist",
       "!dist/**",
       "!dist-*",
-      "!dist-*/**"
+      "!dist-*/**",
+      "!icon-check",
+      "!icon-check/**"
     ],
     "npmRebuild": false
   },

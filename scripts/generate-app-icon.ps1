@@ -70,13 +70,13 @@ function Draw-FileCard {
     $lineLengths = @(($Width * 0.54), ($Width * 0.44), ($Width * 0.50))
     $lineCount = if ($CanvasSize -lt 32) { 2 } else { 3 }
 
-    0..($lineCount - 1) | ForEach-Object {
-        $lineY = $Y + $innerPaddingTop + ($_ * $lineGap)
+    for ($lineIndex = 0; $lineIndex -lt $lineCount; $lineIndex++) {
+        $lineY = $Y + $innerPaddingTop + ($lineIndex * $lineGap)
         $Graphics.DrawLine(
             $linePen,
             $X + $innerPaddingX,
             $lineY,
-            $X + $innerPaddingX + $lineLengths[$_],
+            $X + $innerPaddingX + $lineLengths[$lineIndex],
             $lineY
         )
     }
@@ -92,7 +92,7 @@ function Draw-CompareMark {
         [float]$CanvasSize
     )
 
-    if ($CanvasSize -lt 32) {
+    if ($CanvasSize -lt 64) {
         return
     }
 
@@ -130,6 +130,158 @@ function Draw-CompareMark {
     $markPath.Dispose()
 }
 
+function Draw-SmallAppIcon {
+    param(
+        [System.Drawing.Graphics]$Graphics,
+        [hashtable]$Palette,
+        [int]$Size
+    )
+
+    $badgeRect = [System.Drawing.RectangleF]::new(
+        [float]($Size * 0.08),
+        [float]($Size * 0.08),
+        [float]($Size * 0.84),
+        [float]($Size * 0.84)
+    )
+    $badgePath = New-RoundedRectanglePath -Rect $badgeRect -Radius ($Size * 0.18)
+    $Graphics.FillPath((New-Object System.Drawing.SolidBrush($Palette.Background)), $badgePath)
+
+    $borderWidth = [Math]::Max(1.0, $Size * 0.045)
+    $Graphics.DrawPath((New-Object System.Drawing.Pen($Palette.Border, $borderWidth)), $badgePath)
+
+    $sideWidth = [Math]::Max(2.0, $Size * 0.17)
+    $centerWidth = [Math]::Max(3.0, $Size * 0.2)
+    $sideHeight = $Size * 0.44
+    $centerHeight = $Size * 0.56
+    $sideY = $Size * 0.32
+    $centerY = $Size * 0.24
+    $radius = [Math]::Max(1.5, $Size * 0.055)
+
+    $cardSpecs = @(
+        @{
+            X = $Size * 0.25
+            Y = $sideY
+            Width = $sideWidth
+            Height = $sideHeight
+            Fill = $Palette.SideCard
+        },
+        @{
+            X = $Size * 0.40
+            Y = $centerY
+            Width = $centerWidth
+            Height = $centerHeight
+            Fill = $Palette.PrimaryCard
+        },
+        @{
+            X = $Size * 0.58
+            Y = $sideY
+            Width = $sideWidth
+            Height = $sideHeight
+            Fill = $Palette.SideCard
+        }
+    )
+
+    foreach ($card in $cardSpecs) {
+        $rect = [System.Drawing.RectangleF]::new(
+            [float]$card.X,
+            [float]$card.Y,
+            [float]$card.Width,
+            [float]$card.Height
+        )
+        $path = New-RoundedRectanglePath -Rect $rect -Radius $radius
+        $Graphics.FillPath((New-Object System.Drawing.SolidBrush($card.Fill)), $path)
+        $path.Dispose()
+    }
+
+    if ($Size -ge 32) {
+        $dotRadius = [Math]::Max(1.0, $Size * 0.035)
+        $dotY = $Size * 0.79
+        foreach ($dotX in @(($Size * 0.43), ($Size * 0.50), ($Size * 0.57))) {
+            $dotColor = if ([Math]::Abs($dotX - ($Size * 0.50)) -lt 0.1) { $Palette.MarkCenterDot } else { $Palette.MarkSideDot }
+            $Graphics.FillEllipse(
+                (New-Object System.Drawing.SolidBrush($dotColor)),
+                $dotX - $dotRadius,
+                $dotY - $dotRadius,
+                $dotRadius * 2,
+                $dotRadius * 2
+            )
+        }
+    }
+
+    $badgePath.Dispose()
+}
+
+function Draw-InstallerFileGlyph {
+    param(
+        [System.Drawing.Graphics]$Graphics,
+        [float]$X,
+        [float]$Y,
+        [float]$Width,
+        [float]$Height,
+        [float]$Radius,
+        [System.Drawing.Color]$FillColor,
+        [System.Drawing.Color]$BorderColor,
+        [System.Drawing.Color]$LineColor,
+        [bool]$ShowLines = $true
+    )
+
+    $rect = [System.Drawing.RectangleF]::new([float]$X, [float]$Y, [float]$Width, [float]$Height)
+    $path = New-RoundedRectanglePath -Rect $rect -Radius $Radius
+    $Graphics.FillPath((New-Object System.Drawing.SolidBrush($FillColor)), $path)
+    $Graphics.DrawPath((New-Object System.Drawing.Pen($BorderColor, [Math]::Max(1.0, $Width * 0.06))), $path)
+
+    if ($ShowLines) {
+        $linePen = New-Object System.Drawing.Pen($LineColor, [Math]::Max(1.0, $Width * 0.08))
+        $linePen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+        $linePen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+
+        $lineX = $X + ($Width * 0.22)
+        $lineWidth = $Width * 0.46
+        foreach ($lineY in @(($Y + ($Height * 0.38)), ($Y + ($Height * 0.56)), ($Y + ($Height * 0.74)))) {
+            $Graphics.DrawLine($linePen, $lineX, $lineY, $lineX + $lineWidth, $lineY)
+        }
+
+        $linePen.Dispose()
+    }
+
+    $path.Dispose()
+}
+
+function New-InstallerIconBitmap {
+    param([int]$Size)
+
+    $palette = @{
+        Border = [System.Drawing.ColorTranslator]::FromHtml('#0B1220')
+        SideCard = [System.Drawing.ColorTranslator]::FromHtml('#F8FAFC')
+        PrimaryCard = [System.Drawing.ColorTranslator]::FromHtml('#14B8A6')
+        SideLines = [System.Drawing.ColorTranslator]::FromHtml('#1F2937')
+        PrimaryLines = [System.Drawing.ColorTranslator]::FromHtml('#ECFEFF')
+    }
+
+    $bitmap = New-Object System.Drawing.Bitmap($Size, $Size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+    $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+    $graphics.Clear([System.Drawing.Color]::Transparent)
+
+    $showLines = $Size -ge 32
+    $sideWidth = $Size * 0.24
+    $centerWidth = $Size * 0.30
+    $sideHeight = $Size * 0.60
+    $centerHeight = $Size * 0.74
+    $sideY = $Size * 0.24
+    $centerY = $Size * 0.13
+    $radius = [Math]::Max(1.0, $Size * 0.065)
+
+    Draw-InstallerFileGlyph -Graphics $graphics -X ($Size * 0.12) -Y $sideY -Width $sideWidth -Height $sideHeight -Radius $radius -FillColor $palette.SideCard -BorderColor $palette.Border -LineColor $palette.SideLines -ShowLines $showLines
+    Draw-InstallerFileGlyph -Graphics $graphics -X ($Size * 0.64) -Y $sideY -Width $sideWidth -Height $sideHeight -Radius $radius -FillColor $palette.SideCard -BorderColor $palette.Border -LineColor $palette.SideLines -ShowLines $showLines
+    Draw-InstallerFileGlyph -Graphics $graphics -X ($Size * 0.35) -Y $centerY -Width $centerWidth -Height $centerHeight -Radius $radius -FillColor $palette.PrimaryCard -BorderColor $palette.Border -LineColor $palette.PrimaryLines -ShowLines $showLines
+
+    $graphics.Dispose()
+    return $bitmap
+}
+
 function New-AppIconBitmap {
     param([int]$Size)
 
@@ -156,6 +308,12 @@ function New-AppIconBitmap {
     $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
     $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
     $graphics.Clear([System.Drawing.Color]::Transparent)
+
+    if ($Size -lt 48) {
+        Draw-SmallAppIcon -Graphics $graphics -Palette $palette -Size $Size
+        $graphics.Dispose()
+        return $bitmap
+    }
 
     $badgeRect = [System.Drawing.RectangleF]::new(
         [float]($Size * 0.08),
@@ -190,6 +348,87 @@ function Save-Png {
     )
 
     $Bitmap.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
+}
+
+function Save-Bmp {
+    param(
+        [System.Drawing.Bitmap]$Bitmap,
+        [string]$Path
+    )
+
+    $Bitmap.Save($Path, [System.Drawing.Imaging.ImageFormat]::Bmp)
+}
+
+function New-InstallerHeaderBitmap {
+    $width = 150
+    $height = 57
+    $bitmap = New-Object System.Drawing.Bitmap($width, $height, [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
+    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+    $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+
+    $graphics.Clear([System.Drawing.ColorTranslator]::FromHtml('#F8FAFC'))
+    $accentBrush = New-Object System.Drawing.SolidBrush([System.Drawing.ColorTranslator]::FromHtml('#14B8A6'))
+    $lineBrush = New-Object System.Drawing.SolidBrush([System.Drawing.ColorTranslator]::FromHtml('#E2E8F0'))
+    $graphics.FillRectangle($lineBrush, 0, $height - 1, $width, 1)
+    $graphics.FillRectangle($accentBrush, 0, $height - 3, 46, 3)
+
+    $icon = New-AppIconBitmap -Size 256
+    $graphics.DrawImage($icon, [System.Drawing.Rectangle]::new(102, 8, 40, 40))
+
+    $icon.Dispose()
+    $accentBrush.Dispose()
+    $lineBrush.Dispose()
+    $graphics.Dispose()
+    return $bitmap
+}
+
+function New-InstallerSidebarBitmap {
+    $width = 164
+    $height = 314
+    $bitmap = New-Object System.Drawing.Bitmap($width, $height, [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
+    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+    $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+
+    $background = New-Object System.Drawing.SolidBrush([System.Drawing.ColorTranslator]::FromHtml('#0B1220'))
+    $panel = New-Object System.Drawing.SolidBrush([System.Drawing.ColorTranslator]::FromHtml('#111C2F'))
+    $accent = New-Object System.Drawing.SolidBrush([System.Drawing.ColorTranslator]::FromHtml('#14B8A6'))
+    $muted = New-Object System.Drawing.SolidBrush([System.Drawing.ColorTranslator]::FromHtml('#475569'))
+    $textBrush = New-Object System.Drawing.SolidBrush([System.Drawing.ColorTranslator]::FromHtml('#F8FAFC'))
+    $subtleBrush = New-Object System.Drawing.SolidBrush([System.Drawing.ColorTranslator]::FromHtml('#94A3B8'))
+
+    $graphics.FillRectangle($background, 0, 0, $width, $height)
+
+    $panelRect = [System.Drawing.RectangleF]::new(18, 24, 128, 162)
+    $panelPath = New-RoundedRectanglePath -Rect $panelRect -Radius 18
+    $graphics.FillPath($panel, $panelPath)
+
+    $icon = New-AppIconBitmap -Size 256
+    $graphics.DrawImage($icon, [System.Drawing.Rectangle]::new(43, 48, 78, 78))
+
+    $fontTitle = New-Object System.Drawing.Font('Segoe UI Semibold', 13, [System.Drawing.FontStyle]::Bold)
+    $fontSmall = New-Object System.Drawing.Font('Segoe UI', 8.5)
+    $graphics.DrawString('N-Way', $fontTitle, $textBrush, [System.Drawing.PointF]::new(28, 206))
+    $graphics.DrawString('Compare', $fontTitle, $textBrush, [System.Drawing.PointF]::new(28, 226))
+    $graphics.FillRectangle($accent, 28, 260, 42, 3)
+    $graphics.FillRectangle($muted, 74, 260, 42, 3)
+    $graphics.DrawString('Folder diff tool', $fontSmall, $subtleBrush, [System.Drawing.PointF]::new(28, 274))
+
+    $icon.Dispose()
+    $fontTitle.Dispose()
+    $fontSmall.Dispose()
+    $panelPath.Dispose()
+    $background.Dispose()
+    $panel.Dispose()
+    $accent.Dispose()
+    $muted.Dispose()
+    $textBrush.Dispose()
+    $subtleBrush.Dispose()
+    $graphics.Dispose()
+    return $bitmap
 }
 
 function Get-PngBytes {
@@ -252,22 +491,52 @@ if (-not (Test-Path $assetsDir)) {
 
 $pngPath = Join-Path $assetsDir 'app-icon.png'
 $icoPath = Join-Path $assetsDir 'app-icon.ico'
+$installerIconPath = Join-Path $assetsDir 'installer-icon.ico'
+$installerHeaderPath = Join-Path $assetsDir 'installer-header.bmp'
+$installerSidebarPath = Join-Path $assetsDir 'installer-sidebar.bmp'
 
 $masterBitmap = New-AppIconBitmap -Size 1024
 Save-Png -Bitmap $masterBitmap -Path $pngPath
 $masterBitmap.Dispose()
 
-$icoImages = @(16, 24, 32, 48, 64, 128, 256) | ForEach-Object {
-    $icoBitmap = New-AppIconBitmap -Size $_
+$icoImages = @()
+foreach ($iconSize in @(16, 24, 32, 48, 64, 128, 256)) {
+    $icoBitmap = New-AppIconBitmap -Size $iconSize
     $icoBytes = Get-PngBytes -Bitmap $icoBitmap
     $icoBitmap.Dispose()
 
-    @{
-        Size = $_
+    $icoImages += @{
+        Size = $iconSize
         Bytes = $icoBytes
     }
 }
 
 Save-Ico -Path $icoPath -Images $icoImages
+
+$installerIcoImages = @()
+foreach ($iconSize in @(16, 24, 32, 48, 64, 128, 256)) {
+    $installerIcoBitmap = New-InstallerIconBitmap -Size $iconSize
+    $installerIcoBytes = Get-PngBytes -Bitmap $installerIcoBitmap
+    $installerIcoBitmap.Dispose()
+
+    $installerIcoImages += @{
+        Size = $iconSize
+        Bytes = $installerIcoBytes
+    }
+}
+
+Save-Ico -Path $installerIconPath -Images $installerIcoImages
+
+$installerHeaderBitmap = New-InstallerHeaderBitmap
+Save-Bmp -Bitmap $installerHeaderBitmap -Path $installerHeaderPath
+$installerHeaderBitmap.Dispose()
+
+$installerSidebarBitmap = New-InstallerSidebarBitmap
+Save-Bmp -Bitmap $installerSidebarBitmap -Path $installerSidebarPath
+$installerSidebarBitmap.Dispose()
+
 Write-Host "Generated $pngPath"
 Write-Host "Generated $icoPath"
+Write-Host "Generated $installerIconPath"
+Write-Host "Generated $installerHeaderPath"
+Write-Host "Generated $installerSidebarPath"
