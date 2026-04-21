@@ -337,10 +337,11 @@
 
 .difference-compare {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   flex: 1;
   min-width: 0;
   min-height: 0;
+  background: #d8d8d8;
 }
 
 .difference-pane-headers {
@@ -633,6 +634,114 @@
   height: 1px;
 }
 
+.difference-overview {
+  --difference-overview-width: 116px;
+  flex: 0 0 clamp(84px, var(--difference-overview-width), 220px);
+  width: clamp(84px, var(--difference-overview-width), 220px);
+  min-height: 0;
+  padding: 8px 8px 8px 7px;
+  box-sizing: border-box;
+  background: #f5f6f8;
+  border-left: 1px solid #a9a9a9;
+  box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.65);
+  user-select: none;
+}
+
+.difference-overview:focus {
+  outline: none;
+}
+
+.difference-overview:focus-visible .difference-overview-track {
+  box-shadow:
+    inset 0 0 0 1px #5e7eb9,
+    0 0 0 2px rgba(94, 126, 185, 0.22);
+}
+
+.difference-overview-track {
+  position: relative;
+  height: 100%;
+  min-height: 120px;
+  overflow: hidden;
+  cursor: pointer;
+  background: #fbfbfd;
+  border: 1px solid #9a9a9a;
+}
+
+.difference-overview-hunks,
+.difference-overview-lanes {
+  position: absolute;
+  inset: 0;
+}
+
+.difference-overview-hunk {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: rgba(237, 113, 113, 0.35);
+}
+
+.difference-overview-lanes {
+  display: grid;
+  column-gap: 0;
+  padding: 0 6px;
+  box-sizing: border-box;
+}
+
+.difference-overview-lane {
+  position: relative;
+  min-width: 0;
+}
+
+.difference-overview-lane + .difference-overview-lane {
+  border-left: 1px solid rgba(84, 84, 84, 0.46);
+}
+
+.difference-overview-change,
+.difference-overview-selection {
+  position: absolute;
+  left: 0;
+  right: 0;
+}
+
+.difference-overview-change {
+  background: #f18b8b;
+  box-shadow: 0 0 0 1px rgba(183, 70, 70, 0.18);
+}
+
+.difference-overview-change.is-missing {
+  background: #8ca7d8;
+  box-shadow: 0 0 0 1px rgba(67, 97, 154, 0.2);
+}
+
+.difference-overview-selection {
+  left: 3px;
+  right: 3px;
+  z-index: 4;
+  background: rgba(70, 119, 199, 0.2);
+  border-top: 1px solid rgba(44, 83, 153, 0.75);
+  border-bottom: 1px solid rgba(44, 83, 153, 0.75);
+  pointer-events: none;
+}
+
+.difference-overview-selection[hidden] {
+  display: none;
+}
+
+.difference-overview-viewport {
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  z-index: 5;
+  box-sizing: border-box;
+  min-height: 28px;
+  background: rgba(143, 146, 221, 0.24);
+  border: 1px solid rgba(83, 85, 157, 0.72);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.5),
+    0 1px 3px rgba(0, 0, 0, 0.16);
+  pointer-events: none;
+}
+
 @media (max-width: 1200px) {
   .difference-dialog {
     width: calc(100vw - 12px);
@@ -641,5 +750,16 @@
 
   .difference-tab {
     min-width: 500px;
+  }
+
+  .difference-overview {
+    flex-basis: clamp(72px, var(--difference-overview-width), 120px);
+    width: clamp(72px, var(--difference-overview-width), 120px);
+    padding-inline: 6px;
+  }
+
+  .difference-overview-lanes {
+    column-gap: 1px;
+    padding-inline: 4px;
   }
 }

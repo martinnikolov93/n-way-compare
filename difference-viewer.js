@@ -74,6 +74,11 @@
             this.rowsHostEl = null;
             this.headersContainerEl = null;
             this.scrollbarRowEl = null;
+            this.overviewEl = null;
+            this.overviewTrackEl = null;
+            this.overviewViewportEl = null;
+            this.overviewSelectionEl = null;
+            this.isDraggingOverview = false;
             this.activeTemplateColumns = '';
             this.activeRenderedTabId = null;
             this.visibleRowRange = null;
@@ -96,6 +101,7 @@
             document.addEventListener('keyup', this.handleKeyUp.bind(this));
             document.addEventListener('mousemove', this.handleGlobalMouseMove.bind(this));
             document.addEventListener('mouseup', this.handleGlobalMouseUp.bind(this));
+            window.addEventListener('resize', () => this.updateOverviewViewport());
         }
 
         build() {
@@ -398,6 +404,7 @@
             if (tab) {
                 this.updateStatusForTab(tab);
                 this.updateToolbarState();
+                this.updateOverviewSelection();
             }
         }
 
@@ -1433,8 +1440,293 @@
             this.restorePaneScrollPositions(tab);
         }
 
+        rowHasPaneDiff(row, paneIndex) {
+            const cell = row?.cells?.[paneIndex];
+            return Boolean(cell && (cell.changedLeft || cell.changedRight || cell.missing));
+        }
+
+        getOverviewSegments(tab) {
+            const segmentsByPane = Array.from({ length: tab.panes.length }, () => []);
+            const openSegments = Array.from({ length: tab.panes.length }, () => null);
+
+            tab.rows.forEach((row, rowIndex) => {
+                tab.panes.forEach((_, paneIndex) => {
+                    const changed = this.rowHasPaneDiff(row, paneIndex);
+                    const cell = row?.cells?.[paneIndex];
+                    const missing = Boolean(cell?.missing);
+                    const openSegment = openSegments[paneIndex];
+
+                    if (changed) {
+                        if (openSegment) {
+                            openSegment.missing = openSegment.missing && missing;
+                        } else {
+                            openSegments[paneIndex] = {
+                                start: rowIndex,
+                                end: rowIndex,
+                                missing
+                            };
+                        }
+                        return;
+                    }
+
+                    if (openSegment) {
+                        openSegment.end = rowIndex - 1;
+                        segmentsByPane[paneIndex].push(openSegment);
+                        openSegments[paneIndex] = null;
+                    }
+                });
+            });
+
+            openSegments.forEach((segment, paneIndex) => {
+                if (segment) {
+                    segment.end = tab.rows.length - 1;
+                    segmentsByPane[paneIndex].push(segment);
+                }
+            });
+
+            return segmentsByPane;
+        }
+
+        setOverviewRangeStyle(element, startRow, endRow, totalRows, minPixels = 2) {
+            const safeTotal = Math.max(totalRows, 1);
+            const startRatio = clamp(startRow / safeTotal, 0, 1);
+            const endRatio = clamp((endRow + 1) / safeTotal, startRatio, 1);
+            const heightRatio = Math.max(0, endRatio - startRatio);
+
+            element.style.top = (startRatio * 100).toFixed(4) + '%';
+            element.style.height = `max(${minPixels}px, ${(heightRatio * 100).toFixed(4)}%)`;
+        }
+
+        createOverviewMarker(startRow, endRow, totalRows, className, minPixels = 2) {
+            const marker = document.createElement('div');
+            marker.className = className;
+            this.setOverviewRangeStyle(marker, startRow, endRow, totalRows, minPixels);
+            return marker;
+        }
+
+        createOverviewMap(tab) {
+            const overview = document.createElement('div');
+            overview.className = 'difference-overview';
+            overview.style.setProperty('--difference-overview-width', clamp(84 + tab.panes.length * 6, 104, 220) + 'px');
+            overview.title = 'File overview: click or drag to jump through the diff';
+            overview.setAttribute('role', 'scrollbar');
+            overview.setAttribute('aria-orientation', 'vertical');
+            overview.setAttribute('aria-label', 'File overview');
+            overview.setAttribute('aria-valuemin', '1');
+            overview.setAttribute('aria-valuemax', String(Math.max(tab.rows.length, 1)));
+            overview.tabIndex = 0;
+
+            const track = document.createElement('div');
+            track.className = 'difference-overview-track';
+
+            const hunkLayer = document.createElement('div');
+            hunkLayer.className = 'difference-overview-hunks';
+            tab.hunks.forEach((hunk) => {
+                hunkLayer.appendChild(this.createOverviewMarker(
+                    hunk.start,
+                    hunk.end,
+                    tab.rows.length,
+                    'difference-overview-hunk',
+                    3
+                ));
+            });
+
+            const lanes = document.createElement('div');
+            lanes.className = 'difference-overview-lanes';
+            lanes.style.gridTemplateColumns = `repeat(${Math.max(tab.panes.length, 1)}, minmax(4px, 1fr))`;
+
+            const segmentsByPane = this.getOverviewSegments(tab);
+            segmentsByPane.forEach((segments, paneIndex) => {
+                const lane = document.createElement('div');
+                lane.className = 'difference-overview-lane';
+                lane.title = tab.panes[paneIndex]?.label || '';
+
+                segments.forEach((segment) => {
+                    lane.appendChild(this.createOverviewMarker(
+                        segment.start,
+                        segment.end,
+                        tab.rows.length,
+                        'difference-overview-change' + (segment.missing ? ' is-missing' : ''),
+                        2
+                    ));
+                });
+
+                lanes.appendChild(lane);
+            });
+
+            const selection = document.createElement('div');
+            selection.className = 'difference-overview-selection';
+
+            const viewport = document.createElement('div');
+            viewport.className = 'difference-overview-viewport';
+
+            track.appendChild(hunkLayer);
+            track.appendChild(lanes);
+            track.appendChild(selection);
+            track.appendChild(viewport);
+            overview.appendChild(track);
+
+            track.addEventListener('pointerdown', (event) => this.handleOverviewPointerDown(event));
+            track.addEventListener('pointermove', (event) => this.handleOverviewPointerMove(event));
+            track.addEventListener('pointerup', (event) => this.handleOverviewPointerUp(event));
+            track.addEventListener('pointercancel', (event) => this.handleOverviewPointerUp(event));
+            overview.addEventListener('keydown', (event) => this.handleOverviewKeyDown(event));
+
+            this.overviewEl = overview;
+            this.overviewTrackEl = track;
+            this.overviewViewportEl = viewport;
+            this.overviewSelectionEl = selection;
+
+            return overview;
+        }
+
+        getVisibleOverviewRatios(tab) {
+            if (!this.gridScroll || !this.rowsHostEl || !tab?.rows?.length) {
+                return { start: 0, end: 1, currentRow: 0 };
+            }
+
+            const totalRows = tab.rows.length;
+            const headerHeight = this.headersContainerEl?.offsetHeight || 0;
+            const rowsTopOffset = this.rowsHostEl.offsetTop;
+            const scrollbarHeight = this.scrollbarRowEl?.offsetHeight || 0;
+            const currentTop = this.gridScroll.scrollTop;
+            const viewportHeight = this.gridScroll.clientHeight;
+            const totalRowsHeight = Math.max(1, totalRows * this.virtualRowHeight);
+            const visibleTop = clamp(currentTop + headerHeight - rowsTopOffset, 0, totalRowsHeight);
+            const visibleBottom = clamp(
+                currentTop + viewportHeight - scrollbarHeight - rowsTopOffset,
+                visibleTop,
+                totalRowsHeight
+            );
+
+            return {
+                start: visibleTop / totalRowsHeight,
+                end: visibleBottom / totalRowsHeight,
+                currentRow: clamp(Math.round(visibleTop / this.virtualRowHeight) + 1, 1, totalRows)
+            };
+        }
+
+        updateOverviewViewport() {
+            const tab = this.getActiveTab();
+            if (!tab || !this.overviewViewportEl || !this.overviewEl || !tab.rows.length) {
+                return;
+            }
+
+            const ratios = this.getVisibleOverviewRatios(tab);
+            const viewportRatio = Math.max(0, ratios.end - ratios.start);
+            const trackHeight = this.overviewTrackEl?.clientHeight || 0;
+
+            if (trackHeight > 0) {
+                const viewportHeight = Math.min(trackHeight, Math.max(28, viewportRatio * trackHeight));
+                const maxScrollTop = Math.max(0, this.gridScroll.scrollHeight - this.gridScroll.clientHeight);
+                const scrollProgress = maxScrollTop > 0
+                    ? clamp(this.gridScroll.scrollTop / maxScrollTop, 0, 1)
+                    : 0;
+                const viewportTop = scrollProgress * Math.max(0, trackHeight - viewportHeight);
+
+                this.overviewViewportEl.style.top = Math.round(viewportTop) + 'px';
+                this.overviewViewportEl.style.height = Math.round(viewportHeight) + 'px';
+            } else {
+                this.overviewViewportEl.style.top = (ratios.start * 100).toFixed(4) + '%';
+                this.overviewViewportEl.style.height = `max(28px, ${(viewportRatio * 100).toFixed(4)}%)`;
+            }
+
+            this.overviewEl.setAttribute('aria-valuenow', String(ratios.currentRow));
+            this.overviewEl.setAttribute('aria-valuetext', 'Row ' + ratios.currentRow + ' of ' + tab.rows.length);
+        }
+
+        updateOverviewSelection() {
+            const tab = this.getActiveTab();
+            const selection = tab?.selection || null;
+            if (!tab || !this.overviewSelectionEl || !tab.rows.length || !selection) {
+                if (this.overviewSelectionEl) {
+                    this.overviewSelectionEl.hidden = true;
+                }
+                return;
+            }
+
+            this.overviewSelectionEl.hidden = false;
+            this.setOverviewRangeStyle(
+                this.overviewSelectionEl,
+                selection.startRow,
+                selection.endRow,
+                tab.rows.length,
+                4
+            );
+        }
+
+        scrollOverviewToClientY(clientY) {
+            const tab = this.getActiveTab();
+            if (!tab || !this.overviewTrackEl || !tab.rows.length) {
+                return;
+            }
+
+            const rect = this.overviewTrackEl.getBoundingClientRect();
+            const ratio = rect.height > 0
+                ? clamp((clientY - rect.top) / rect.height, 0, 1)
+                : 0;
+            const targetRow = clamp(Math.floor(ratio * tab.rows.length), 0, tab.rows.length - 1);
+            this.scrollToRow(targetRow, { behavior: 'auto', block: 'center' });
+            this.updateOverviewViewport();
+        }
+
+        handleOverviewPointerDown(event) {
+            if (event.button !== 0) {
+                return;
+            }
+
+            event.preventDefault();
+            this.finishInlineEdit({ commit: true });
+            this.isDraggingOverview = true;
+            this.overviewTrackEl?.setPointerCapture?.(event.pointerId);
+            this.scrollOverviewToClientY(event.clientY);
+        }
+
+        handleOverviewPointerMove(event) {
+            if (!this.isDraggingOverview) {
+                return;
+            }
+
+            event.preventDefault();
+            this.scrollOverviewToClientY(event.clientY);
+        }
+
+        handleOverviewPointerUp(event) {
+            if (!this.isDraggingOverview) {
+                return;
+            }
+
+            this.isDraggingOverview = false;
+            this.overviewTrackEl?.releasePointerCapture?.(event.pointerId);
+        }
+
+        handleOverviewKeyDown(event) {
+            if (!this.gridScroll) {
+                return;
+            }
+
+            if (event.key === 'Home') {
+                event.preventDefault();
+                this.scrollToRow(0, { behavior: 'auto', block: 'center' });
+            } else if (event.key === 'End') {
+                const tab = this.getActiveTab();
+                if (!tab?.rows?.length) {
+                    return;
+                }
+                event.preventDefault();
+                this.scrollToRow(tab.rows.length - 1, { behavior: 'auto', block: 'center' });
+            } else if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                this.navigateHunk(-1);
+            } else if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                this.navigateHunk(1);
+            }
+        }
+
         handleGridScroll() {
             this.renderVirtualRows();
+            this.updateOverviewViewport();
         }
 
         renderActiveTab() {
@@ -1471,6 +1763,11 @@
             this.codeContentElements = [];
             this.paneScrollbarElements = [];
             this.paneScrollbarSpacerElements = [];
+            this.overviewEl = null;
+            this.overviewTrackEl = null;
+            this.overviewViewportEl = null;
+            this.overviewSelectionEl = null;
+            this.isDraggingOverview = false;
 
             if (!tab) {
                 this.headerTitleEl.textContent = 'Difference';
@@ -1602,6 +1899,11 @@
 
             gridScroll.appendChild(grid);
             compare.appendChild(gridScroll);
+
+            if (tab.rows.length) {
+                compare.appendChild(this.createOverviewMap(tab));
+            }
+
             this.bodyEl.appendChild(compare);
 
             this.gridScroll = gridScroll;
@@ -1613,17 +1915,23 @@
                 this.gridScroll.scrollTop = previousTop;
                 this.gridScroll.scrollLeft = previousLeft;
             }
+            this.updateOverviewViewport();
+            this.updateOverviewSelection();
             this.renderVirtualRows(true);
             requestAnimationFrame(() => {
                 if (this.gridScroll) {
                     this.gridScroll.scrollTop = previousTop;
                     this.gridScroll.scrollLeft = previousLeft;
                     this.renderVirtualRows(true);
+                    this.updateOverviewViewport();
+                    this.updateOverviewSelection();
                 }
                 if (pendingRowReveal) {
                     this.pendingRowReveal = null;
                     this.scrollToRow(pendingRowReveal.rowIndex, pendingRowReveal.options);
                     this.renderVirtualRows(true);
+                    this.updateOverviewViewport();
+                    this.updateOverviewSelection();
                 }
             });
             if (shouldResetViewerOpenScroll) {
