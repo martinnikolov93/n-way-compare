@@ -20,7 +20,7 @@ function New-RoundedRectanglePath {
     return $path
 }
 
-function Draw-ColumnCard {
+function Draw-FileCard {
     param(
         [System.Drawing.Graphics]$Graphics,
         [hashtable]$Palette,
@@ -30,88 +30,124 @@ function Draw-ColumnCard {
         [float]$Width,
         [float]$Height,
         [System.Drawing.Color]$FillColor,
-        [System.Drawing.Color]$LineColor
+        [System.Drawing.Color]$LineColor,
+        [bool]$Primary = $false
     )
 
-    $radius = [Math]::Max(8.0, $CanvasSize * 0.035)
+    $shadowOffset = [Math]::Max(2.0, $CanvasSize * 0.018)
+    $shadowRect = [System.Drawing.RectangleF]::new(
+        [float]($X + $shadowOffset),
+        [float]($Y + $shadowOffset),
+        [float]$Width,
+        [float]$Height
+    )
+    $shadowPath = New-RoundedRectanglePath -Rect $shadowRect -Radius ([Math]::Max(8.0, $CanvasSize * 0.04))
+    $Graphics.FillPath((New-Object System.Drawing.SolidBrush($Palette.Shadow)), $shadowPath)
+    $shadowPath.Dispose()
+
+    $radius = [Math]::Max(8.0, $CanvasSize * 0.04)
     $cardRect = [System.Drawing.RectangleF]::new([float]$X, [float]$Y, [float]$Width, [float]$Height)
     $path = New-RoundedRectanglePath -Rect $cardRect -Radius $radius
     $Graphics.FillPath((New-Object System.Drawing.SolidBrush($FillColor)), $path)
-    $Graphics.DrawPath((New-Object System.Drawing.Pen($Palette.Border, [Math]::Max(2.0, $CanvasSize * 0.012))), $path)
+    $Graphics.DrawPath((New-Object System.Drawing.Pen($Palette.CardBorder, [Math]::Max(2.0, $CanvasSize * 0.01))), $path)
 
-    $lineWidth = [Math]::Max(4.0, $CanvasSize * 0.018)
+    $foldSize = $Width * 0.25
+    $foldPoints = New-Object 'System.Drawing.PointF[]' 3
+    $foldPoints[0] = [System.Drawing.PointF]::new([float]($X + $Width - $foldSize), [float]$Y)
+    $foldPoints[1] = [System.Drawing.PointF]::new([float]($X + $Width), [float]$Y)
+    $foldPoints[2] = [System.Drawing.PointF]::new([float]($X + $Width), [float]($Y + $foldSize))
+    $foldColor = if ($Primary) { $Palette.PrimaryFold } else { $Palette.SideFold }
+    $Graphics.FillPolygon((New-Object System.Drawing.SolidBrush($foldColor)), $foldPoints)
+
+    $lineWidth = [Math]::Max(3.0, $CanvasSize * 0.014)
     $linePen = New-Object System.Drawing.Pen($LineColor, $lineWidth)
     $linePen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
     $linePen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
 
-    $innerPaddingX = $Width * 0.2
-    $innerPaddingTop = $Height * 0.24
-    $lineGap = $Height * 0.16
-    $lineLength = $Width * 0.5
+    $innerPaddingX = $Width * 0.18
+    $innerPaddingTop = $Height * 0.34
+    $lineGap = $Height * 0.15
+    $lineLengths = @(($Width * 0.54), ($Width * 0.44), ($Width * 0.50))
+    $lineCount = if ($CanvasSize -lt 32) { 2 } else { 3 }
 
-    0..2 | ForEach-Object {
+    0..($lineCount - 1) | ForEach-Object {
         $lineY = $Y + $innerPaddingTop + ($_ * $lineGap)
         $Graphics.DrawLine(
             $linePen,
             $X + $innerPaddingX,
             $lineY,
-            $X + $innerPaddingX + $lineLength,
+            $X + $innerPaddingX + $lineLengths[$_],
             $lineY
         )
     }
+
+    $linePen.Dispose()
+    $path.Dispose()
 }
 
-function Draw-CompareArrows {
+function Draw-CompareMark {
     param(
         [System.Drawing.Graphics]$Graphics,
         [hashtable]$Palette,
         [float]$CanvasSize
     )
 
-    $penWidth = [Math]::Max(10.0, $CanvasSize * 0.022)
-    $pen = New-Object System.Drawing.Pen($Palette.Arrow, $penWidth)
-    $pen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
-    $pen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
-    $pen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
+    if ($CanvasSize -lt 32) {
+        return
+    }
 
-    $midY = $CanvasSize * 0.71
-    $leftX = $CanvasSize * 0.26
-    $rightX = $CanvasSize * 0.74
-    $centerX = $CanvasSize * 0.5
-    $offsetY = $CanvasSize * 0.045
-    $headSize = $CanvasSize * 0.04
-
-    $Graphics.DrawLine($pen, $leftX, $midY - $offsetY, $rightX - $headSize, $midY - $offsetY)
-    $Graphics.DrawLine($pen, $rightX - $headSize, $midY - $offsetY, $rightX - ($headSize * 0.4), $midY - ($offsetY + $headSize * 0.55))
-    $Graphics.DrawLine($pen, $rightX - $headSize, $midY - $offsetY, $rightX - ($headSize * 0.4), $midY - ($offsetY - $headSize * 0.55))
-
-    $Graphics.DrawLine($pen, $rightX, $midY + $offsetY, $leftX + $headSize, $midY + $offsetY)
-    $Graphics.DrawLine($pen, $leftX + $headSize, $midY + $offsetY, $leftX + ($headSize * 0.4), $midY + ($offsetY - $headSize * 0.55))
-    $Graphics.DrawLine($pen, $leftX + $headSize, $midY + $offsetY, $leftX + ($headSize * 0.4), $midY + ($offsetY + $headSize * 0.55))
-
-    $dotRadius = $CanvasSize * 0.026
-    $Graphics.FillEllipse(
-        (New-Object System.Drawing.SolidBrush($Palette.ArrowAccent)),
-        $centerX - $dotRadius,
-        $midY - $dotRadius,
-        $dotRadius * 2,
-        $dotRadius * 2
+    $markRect = [System.Drawing.RectangleF]::new(
+        [float]($CanvasSize * 0.33),
+        [float]($CanvasSize * 0.755),
+        [float]($CanvasSize * 0.34),
+        [float]($CanvasSize * 0.09)
     )
+    $markPath = New-RoundedRectanglePath -Rect $markRect -Radius ($CanvasSize * 0.045)
+    $Graphics.FillPath((New-Object System.Drawing.SolidBrush($Palette.MarkBackground)), $markPath)
+
+    $leftX = $CanvasSize * 0.42
+    $centerX = $CanvasSize * 0.5
+    $rightX = $CanvasSize * 0.58
+    $dotY = $CanvasSize * 0.80
+    $dotRadius = [Math]::Max(4.0, $CanvasSize * 0.018)
+
+    $connectorPen = New-Object System.Drawing.Pen($Palette.MarkConnector, [Math]::Max(2.0, $CanvasSize * 0.008))
+    $connectorPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+    $connectorPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+    $Graphics.DrawLine($connectorPen, $leftX + $dotRadius, $dotY, $centerX - $dotRadius, $dotY)
+    $Graphics.DrawLine($connectorPen, $centerX + $dotRadius, $dotY, $rightX - $dotRadius, $dotY)
+
+    $sideDotBrush = New-Object System.Drawing.SolidBrush($Palette.MarkSideDot)
+    $centerDotBrush = New-Object System.Drawing.SolidBrush($Palette.MarkCenterDot)
+    foreach ($dotX in @($leftX, $rightX)) {
+        $Graphics.FillEllipse($sideDotBrush, $dotX - $dotRadius, $dotY - $dotRadius, $dotRadius * 2, $dotRadius * 2)
+    }
+    $Graphics.FillEllipse($centerDotBrush, $centerX - ($dotRadius * 1.15), $dotY - ($dotRadius * 1.15), $dotRadius * 2.3, $dotRadius * 2.3)
+
+    $connectorPen.Dispose()
+    $sideDotBrush.Dispose()
+    $centerDotBrush.Dispose()
+    $markPath.Dispose()
 }
 
 function New-AppIconBitmap {
     param([int]$Size)
 
     $palette = @{
-        Background = [System.Drawing.ColorTranslator]::FromHtml('#0F172A')
-        Border = [System.Drawing.ColorTranslator]::FromHtml('#0B1220')
-        LeftCard = [System.Drawing.ColorTranslator]::FromHtml('#CBD5E1')
-        MiddleCard = [System.Drawing.ColorTranslator]::FromHtml('#14B8A6')
-        RightCard = [System.Drawing.ColorTranslator]::FromHtml('#E2E8F0')
-        LightLines = [System.Drawing.ColorTranslator]::FromHtml('#F8FAFC')
-        DarkLines = [System.Drawing.ColorTranslator]::FromHtml('#134E4A')
-        Arrow = [System.Drawing.ColorTranslator]::FromHtml('#F8FAFC')
-        ArrowAccent = [System.Drawing.ColorTranslator]::FromHtml('#22C55E')
+        Background = [System.Drawing.ColorTranslator]::FromHtml('#0B1220')
+        Border = [System.Drawing.ColorTranslator]::FromHtml('#172033')
+        CardBorder = [System.Drawing.ColorTranslator]::FromHtml('#111827')
+        Shadow = [System.Drawing.Color]::FromArgb(70, 0, 0, 0)
+        SideCard = [System.Drawing.ColorTranslator]::FromHtml('#E8EEF6')
+        PrimaryCard = [System.Drawing.ColorTranslator]::FromHtml('#14B8A6')
+        SideFold = [System.Drawing.ColorTranslator]::FromHtml('#CBD5E1')
+        PrimaryFold = [System.Drawing.ColorTranslator]::FromHtml('#0F766E')
+        LightLines = [System.Drawing.ColorTranslator]::FromHtml('#ECFEFF')
+        DarkLines = [System.Drawing.ColorTranslator]::FromHtml('#111827')
+        MarkBackground = [System.Drawing.ColorTranslator]::FromHtml('#111C2F')
+        MarkConnector = [System.Drawing.ColorTranslator]::FromHtml('#475569')
+        MarkSideDot = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
+        MarkCenterDot = [System.Drawing.ColorTranslator]::FromHtml('#22C55E')
     }
 
     $bitmap = New-Object System.Drawing.Bitmap($Size, $Size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
@@ -131,16 +167,17 @@ function New-AppIconBitmap {
     $graphics.FillPath((New-Object System.Drawing.SolidBrush($palette.Background)), $badgePath)
     $graphics.DrawPath((New-Object System.Drawing.Pen($palette.Border, [Math]::Max(4.0, $Size * 0.018))), $badgePath)
 
-    $cardWidth = $Size * 0.165
-    $sideHeight = $Size * 0.36
-    $middleHeight = $Size * 0.42
-    $topY = $Size * 0.24
+    $cardWidth = $Size * 0.205
+    $sideHeight = $Size * 0.41
+    $middleHeight = $Size * 0.49
+    $sideY = $Size * 0.31
+    $middleY = $Size * 0.245
 
-    Draw-ColumnCard -Graphics $graphics -Palette $palette -CanvasSize $Size -X ($Size * 0.185) -Y ($topY + $Size * 0.03) -Width $cardWidth -Height $sideHeight -FillColor $palette.LeftCard -LineColor $palette.Background
-    Draw-ColumnCard -Graphics $graphics -Palette $palette -CanvasSize $Size -X ($Size * 0.4175) -Y $topY -Width $cardWidth -Height $middleHeight -FillColor $palette.MiddleCard -LineColor $palette.LightLines
-    Draw-ColumnCard -Graphics $graphics -Palette $palette -CanvasSize $Size -X ($Size * 0.65) -Y ($topY + $Size * 0.03) -Width $cardWidth -Height $sideHeight -FillColor $palette.RightCard -LineColor $palette.Background
+    Draw-FileCard -Graphics $graphics -Palette $palette -CanvasSize $Size -X ($Size * 0.19) -Y $sideY -Width $cardWidth -Height $sideHeight -FillColor $palette.SideCard -LineColor $palette.DarkLines
+    Draw-FileCard -Graphics $graphics -Palette $palette -CanvasSize $Size -X ($Size * 0.605) -Y $sideY -Width $cardWidth -Height $sideHeight -FillColor $palette.SideCard -LineColor $palette.DarkLines
+    Draw-FileCard -Graphics $graphics -Palette $palette -CanvasSize $Size -X ($Size * 0.3975) -Y $middleY -Width $cardWidth -Height $middleHeight -FillColor $palette.PrimaryCard -LineColor $palette.LightLines -Primary $true
 
-    Draw-CompareArrows -Graphics $graphics -Palette $palette -CanvasSize $Size
+    Draw-CompareMark -Graphics $graphics -Palette $palette -CanvasSize $Size
 
     $graphics.Dispose()
     return $bitmap
@@ -168,7 +205,7 @@ function Get-PngBytes {
 function Save-Ico {
     param(
         [string]$Path,
-        [byte[]]$PngBytes
+        [hashtable[]]$Images
     )
 
     $fileStream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Create)
@@ -176,16 +213,30 @@ function Save-Ico {
 
     $writer.Write([UInt16]0)
     $writer.Write([UInt16]1)
-    $writer.Write([UInt16]1)
-    $writer.Write([byte]0)
-    $writer.Write([byte]0)
-    $writer.Write([byte]0)
-    $writer.Write([byte]0)
-    $writer.Write([UInt16]1)
-    $writer.Write([UInt16]32)
-    $writer.Write([UInt32]$PngBytes.Length)
-    $writer.Write([UInt32]22)
-    $fileStream.Write($PngBytes, 0, $PngBytes.Length)
+    $writer.Write([UInt16]$Images.Count)
+
+    $imageOffset = 6 + ($Images.Count * 16)
+    foreach ($image in $Images) {
+        $size = [int]$image.Size
+        $bytes = [byte[]]$image.Bytes
+        $icoSizeByte = if ($size -ge 256) { 0 } else { $size }
+
+        $writer.Write([byte]$icoSizeByte)
+        $writer.Write([byte]$icoSizeByte)
+        $writer.Write([byte]0)
+        $writer.Write([byte]0)
+        $writer.Write([UInt16]1)
+        $writer.Write([UInt16]32)
+        $writer.Write([UInt32]$bytes.Length)
+        $writer.Write([UInt32]$imageOffset)
+
+        $imageOffset += $bytes.Length
+    }
+
+    foreach ($image in $Images) {
+        $bytes = [byte[]]$image.Bytes
+        $fileStream.Write($bytes, 0, $bytes.Length)
+    }
 
     $writer.Dispose()
     $fileStream.Dispose()
@@ -206,10 +257,17 @@ $masterBitmap = New-AppIconBitmap -Size 1024
 Save-Png -Bitmap $masterBitmap -Path $pngPath
 $masterBitmap.Dispose()
 
-$icoBitmap = New-AppIconBitmap -Size 256
-$icoBytes = Get-PngBytes -Bitmap $icoBitmap
-$icoBitmap.Dispose()
+$icoImages = @(16, 24, 32, 48, 64, 128, 256) | ForEach-Object {
+    $icoBitmap = New-AppIconBitmap -Size $_
+    $icoBytes = Get-PngBytes -Bitmap $icoBitmap
+    $icoBitmap.Dispose()
 
-Save-Ico -Path $icoPath -PngBytes $icoBytes
+    @{
+        Size = $_
+        Bytes = $icoBytes
+    }
+}
+
+Save-Ico -Path $icoPath -Images $icoImages
 Write-Host "Generated $pngPath"
 Write-Host "Generated $icoPath"

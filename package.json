@@ -12,15 +12,23 @@
     "productName": "N-Way Compare",
     "win": {
       "icon": "assets/app-icon.ico",
-      "target": "nsis",
-      "signAndEditExecutable": false
+      "target": "nsis"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
+      "createStartMenuShortcut": true,
+      "installerIcon": "assets/app-icon.ico",
+      "uninstallerIcon": "assets/app-icon.ico"
     },
+    "files": [
+      "**/*",
+      "!dist",
+      "!dist/**",
+      "!dist-*",
+      "!dist-*/**"
+    ],
     "npmRebuild": false
   },
   "devDependencies": {
