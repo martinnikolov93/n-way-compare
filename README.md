@@ -76,6 +76,20 @@ The app watches the configured folders for changes. When files or folders change
 
 Exclusion patterns are applied before entries are added to the comparison map. A plain name such as `node_modules` matches any path segment with that name, `*.log` matches file or folder names by basename, and path-like patterns such as `src/generated` skip that relative subtree.
 
+### Exclusion Patterns
+
+Use the `Exclude files and folders` box to skip noisy or heavy paths. Put one pattern per line.
+
+| Pattern type | Example | What it excludes |
+| --- | --- | --- |
+| Folder or file name | `node_modules` | Any path segment named `node_modules`, at any depth. |
+| Folder or file name | `dist` | Any folder or file named `dist`, at any depth. |
+| Basename glob | `*.log` | Any file or folder name ending in `.log`, such as `scan-trace.log`. |
+| Relative subtree | `src/generated` | The `src/generated` subtree from every configured root. |
+| Relative glob subtree | `dist/**` | The `dist` folder and everything under it from every configured root. |
+
+Exclusions also apply to folder watching, so ignored paths do not trigger automatic rescans.
+
 ## Difference Viewer
 
 The Difference Viewer is the built-in multi-pane file diff and merge tool. It opens from the `Difference` action on a file row.
