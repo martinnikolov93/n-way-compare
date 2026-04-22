@@ -989,6 +989,105 @@ body.is-update-blocked {
   overflow: hidden;
 }
 
+body.is-scan-overlay-visible {
+  overflow: hidden;
+}
+
+.scan-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 15000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(237, 242, 248, 0.82);
+}
+
+.scan-overlay[hidden] {
+  display: none;
+}
+
+.scan-overlay-card {
+  width: min(520px, calc(100vw - 48px));
+  padding: 24px;
+  border: 1px solid rgba(173, 186, 207, 0.98);
+  border-radius: 18px;
+  background: #fbfcfe;
+  box-shadow: 0 18px 56px rgba(12, 23, 41, 0.18);
+}
+
+.scan-overlay-eyebrow {
+  margin-bottom: 8px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--app-accent);
+}
+
+.scan-overlay-title {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.2;
+  color: var(--app-text);
+}
+
+.scan-overlay-message {
+  margin: 10px 0 18px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--app-muted);
+}
+
+.scan-overlay-steps {
+  display: grid;
+  gap: 8px;
+}
+
+.scan-overlay-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid rgba(190, 202, 220, 0.92);
+  border-radius: 12px;
+  background: #f2f5fa;
+  color: #62728a;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.scan-overlay-step.is-active {
+  border-color: rgba(72, 113, 188, 0.88);
+  background: #edf3ff;
+  color: #27467f;
+}
+
+.scan-overlay-step.is-complete {
+  border-color: rgba(113, 167, 136, 0.8);
+  background: #eef8f1;
+  color: #2d6d45;
+}
+
+.scan-overlay.is-complete .scan-overlay-eyebrow,
+.scan-overlay.is-complete .scan-overlay-title {
+  color: #2d7a48;
+}
+
+.scan-overlay-step-marker {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.45;
+}
+
+.scan-overlay-step.is-active .scan-overlay-step-marker {
+  opacity: 1;
+  animation: loader-pulse 1.2s ease-in-out infinite;
+}
+
 .update-overlay {
   position: fixed;
   inset: 0;

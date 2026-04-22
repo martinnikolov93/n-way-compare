@@ -15,6 +15,17 @@ let scanPromise = null;
 let scanQueued = false;
 let queuedResetCache = false;
 let updateOverlay = null;
+let scanOverlay = null;
+let scanOverlayTimer = null;
+let scanOverlayStepIndex = 0;
+
+const SCAN_OVERLAY_STEPS = Object.freeze([
+    'Preparing folder scan',
+    'Indexing folder contents',
+    'Applying exclusion patterns',
+    'Comparing file metadata',
+    'Preparing comparison tree'
+]);
 
 const COMPARE_LAYOUT = Object.freeze({
     nameWidth: 360,
@@ -24,6 +35,10 @@ const COMPARE_LAYOUT = Object.freeze({
 
 function arraysEqual(a, b) {
     return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
 }
 
 function getDirs() {
@@ -324,6 +339,147 @@ function handleUpdateStatus(status = {}) {
     if (status.state === 'idle') {
         setUpdateOverlayVisible(false);
     }
+}
+
+function ensureScanOverlay() {
+    if (scanOverlay) {
+        return scanOverlay;
+    }
+
+    const overlay = document.createElement('div');
+    overlay.className = 'scan-overlay';
+    overlay.hidden = true;
+    overlay.setAttribute('role', 'status');
+    overlay.setAttribute('aria-live', 'polite');
+    overlay.setAttribute('aria-labelledby', 'scanOverlayTitle');
+
+    const card = document.createElement('div');
+    card.className = 'scan-overlay-card';
+
+    const eyebrow = document.createElement('div');
+    eyebrow.className = 'scan-overlay-eyebrow';
+    eyebrow.textContent = 'Workspace scan';
+
+    const title = document.createElement('h2');
+    title.id = 'scanOverlayTitle';
+    title.className = 'scan-overlay-title';
+    title.textContent = 'Scanning folders';
+
+    const message = document.createElement('p');
+    message.className = 'scan-overlay-message';
+
+    const steps = document.createElement('div');
+    steps.className = 'scan-overlay-steps';
+
+    const stepElements = SCAN_OVERLAY_STEPS.map((label, index) => {
+        const step = document.createElement('div');
+        step.className = 'scan-overlay-step';
+        step.dataset.stepIndex = String(index);
+
+        const marker = document.createElement('span');
+        marker.className = 'scan-overlay-step-marker';
+
+        const text = document.createElement('span');
+        text.textContent = label;
+
+        step.appendChild(marker);
+        step.appendChild(text);
+        steps.appendChild(step);
+        return step;
+    });
+
+    card.appendChild(eyebrow);
+    card.appendChild(title);
+    card.appendChild(message);
+    card.appendChild(steps);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+
+    scanOverlay = {
+        root: overlay,
+        title,
+        message,
+        stepElements
+    };
+
+    return scanOverlay;
+}
+
+function setScanOverlayStep(index) {
+    const overlay = ensureScanOverlay();
+    scanOverlayStepIndex = clamp(index, 0, SCAN_OVERLAY_STEPS.length - 1);
+
+    overlay.stepElements.forEach((step, stepIndex) => {
+        step.classList.toggle('is-complete', stepIndex < scanOverlayStepIndex);
+        step.classList.toggle('is-active', stepIndex === scanOverlayStepIndex);
+    });
+}
+
+function startScanOverlay({ folderCount = 0, exclusionCount = 0 } = {}) {
+    const overlay = ensureScanOverlay();
+    overlay.title.textContent = 'Scanning folders';
+    overlay.message.textContent = `${folderCount} folder${folderCount === 1 ? '' : 's'} queued` +
+        (exclusionCount ? ` | ${exclusionCount} exclusion pattern${exclusionCount === 1 ? '' : 's'} active` : '');
+    overlay.root.hidden = false;
+    document.body.classList.add('is-scan-overlay-visible');
+    setScanOverlayStep(0);
+
+    if (scanOverlayTimer) {
+        clearInterval(scanOverlayTimer);
+    }
+
+    scanOverlayTimer = setInterval(() => {
+        setScanOverlayStep(Math.min(scanOverlayStepIndex + 1, SCAN_OVERLAY_STEPS.length - 2));
+    }, 1400);
+}
+
+function finishScanOverlay() {
+    if (!scanOverlay) {
+        return;
+    }
+
+    if (scanOverlayTimer) {
+        clearInterval(scanOverlayTimer);
+        scanOverlayTimer = null;
+    }
+
+    setScanOverlayStep(SCAN_OVERLAY_STEPS.length - 1);
+    scanOverlay.title.textContent = 'Rendering comparison';
+}
+
+function completeScanOverlay() {
+    if (!scanOverlay) {
+        return;
+    }
+
+    if (scanOverlayTimer) {
+        clearInterval(scanOverlayTimer);
+        scanOverlayTimer = null;
+    }
+
+    scanOverlayStepIndex = SCAN_OVERLAY_STEPS.length - 1;
+    scanOverlay.root.classList.add('is-complete');
+    scanOverlay.title.textContent = 'Complete';
+    scanOverlay.message.textContent = 'Comparison tree is ready.';
+    scanOverlay.stepElements.forEach(step => {
+        step.classList.add('is-complete');
+        step.classList.remove('is-active');
+    });
+}
+
+function hideScanOverlay() {
+    if (scanOverlayTimer) {
+        clearInterval(scanOverlayTimer);
+        scanOverlayTimer = null;
+    }
+
+    if (!scanOverlay) {
+        return;
+    }
+
+    scanOverlay.root.hidden = true;
+    scanOverlay.root.classList.remove('is-complete');
+    document.body.classList.remove('is-scan-overlay-visible');
 }
 
 function waitForNextPaint() {
@@ -630,9 +786,19 @@ function applyIncrementalScanResult(scanResult) {
     };
 }
 
+function shouldShowFullScanOverlay(nextDirs, exclusions, resetCache) {
+    return Boolean(
+        resetCache ||
+        !currentTree ||
+        !arraysEqual(nextDirs, lastWatchedDirs) ||
+        !arraysEqual(exclusions, lastWatchedExclusions)
+    );
+}
+
 async function performScan(resetCache = false) {
     ensurePreservedScrollState();
     setScanLoading(true);
+    let fullScanOverlayVisible = false;
 
     try {
         dirs = getDirs();
@@ -642,11 +808,24 @@ async function performScan(resetCache = false) {
             return alert('Please enter at least 2 folders');
         }
 
+        fullScanOverlayVisible = shouldShowFullScanOverlay(dirs, exclusions, resetCache);
+        if (fullScanOverlayVisible) {
+            startScanOverlay({
+                folderCount: dirs.length,
+                exclusionCount: exclusions.length
+            });
+            await waitForNextPaint();
+        }
+
         if (resetCache) {
             Object.keys(collapseState).forEach(key => delete collapseState[key]);
         }
 
         const scanResult = await window.api.scan({ dirs, exclusions });
+        if (fullScanOverlayVisible) {
+            finishScanOverlay();
+        }
+
         const scanUpdate = applyIncrementalScanResult(scanResult);
         const shouldRender = scanUpdate.changed || resetCache;
 
@@ -681,9 +860,16 @@ async function performScan(resetCache = false) {
         }
     } catch (err) {
         preservedScrollState = null;
+        hideScanOverlay();
         alert('Scan error: ' + err.message);
     } finally {
         setScanLoading(false);
+        if (fullScanOverlayVisible) {
+            completeScanOverlay();
+            await new Promise(resolve => setTimeout(resolve, 700));
+            await waitForNextPaint();
+            hideScanOverlay();
+        }
     }
 }
 
