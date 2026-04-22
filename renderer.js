@@ -13,6 +13,7 @@ let lastWatchedDirs = [];
 let scanPromise = null;
 let scanQueued = false;
 let queuedResetCache = false;
+let updateOverlay = null;
 
 const COMPARE_LAYOUT = Object.freeze({
     nameWidth: 360,
@@ -124,6 +125,138 @@ function setScanLoading(isLoading) {
     const loader = document.getElementById('scanLoader');
     if (!loader) return;
     loader.classList.toggle('is-visible', isLoading);
+}
+
+function formatUpdateBytes(bytes = 0) {
+    if (!Number.isFinite(bytes) || bytes <= 0) {
+        return '0 MB';
+    }
+
+    const megabytes = bytes / (1024 * 1024);
+    return `${megabytes.toFixed(megabytes >= 10 ? 1 : 2)} MB`;
+}
+
+function ensureUpdateOverlay() {
+    if (updateOverlay) {
+        return updateOverlay;
+    }
+
+    const overlay = document.createElement('div');
+    overlay.className = 'update-overlay';
+    overlay.hidden = true;
+    overlay.setAttribute('role', 'alertdialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'updateOverlayTitle');
+
+    const card = document.createElement('div');
+    card.className = 'update-card';
+
+    const eyebrow = document.createElement('div');
+    eyebrow.className = 'update-eyebrow';
+    eyebrow.textContent = 'Application update';
+
+    const title = document.createElement('h2');
+    title.id = 'updateOverlayTitle';
+    title.className = 'update-title';
+
+    const message = document.createElement('p');
+    message.className = 'update-message';
+
+    const progressTrack = document.createElement('div');
+    progressTrack.className = 'update-progress-track';
+
+    const progressBar = document.createElement('div');
+    progressBar.className = 'update-progress-bar';
+    progressTrack.appendChild(progressBar);
+
+    const meta = document.createElement('div');
+    meta.className = 'update-meta';
+
+    card.appendChild(eyebrow);
+    card.appendChild(title);
+    card.appendChild(message);
+    card.appendChild(progressTrack);
+    card.appendChild(meta);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+
+    updateOverlay = {
+        root: overlay,
+        title,
+        message,
+        progressBar,
+        meta
+    };
+
+    return updateOverlay;
+}
+
+function setUpdateOverlayVisible(isVisible) {
+    const overlay = ensureUpdateOverlay();
+    overlay.root.hidden = !isVisible;
+    document.body.classList.toggle('is-update-blocked', isVisible);
+}
+
+function updateOverlayProgress(status = {}) {
+    const overlay = ensureUpdateOverlay();
+    const percent = Math.max(0, Math.min(100, Number(status.percent) || 0));
+    const total = Number(status.total) || 0;
+    const transferred = Number(status.transferred) || 0;
+
+    overlay.progressBar.style.width = `${percent}%`;
+
+    if (total > 0) {
+        overlay.meta.textContent = `${percent.toFixed(0)}% | ${formatUpdateBytes(transferred)} of ${formatUpdateBytes(total)}`;
+        return;
+    }
+
+    overlay.meta.textContent = `${percent.toFixed(0)}%`;
+}
+
+function handleUpdateStatus(status = {}) {
+    if (status.state === 'downloading') {
+        setUpdateOverlayVisible(true);
+        const overlay = ensureUpdateOverlay();
+        overlay.title.textContent = status.version
+            ? `Downloading N-Way Compare v${status.version}`
+            : 'Downloading N-Way Compare update';
+        overlay.message.textContent = 'Please keep the app open. It will restart automatically when the update is ready to install.';
+        updateOverlayProgress(status);
+        return;
+    }
+
+    if (status.state === 'progress') {
+        setUpdateOverlayVisible(true);
+        updateOverlayProgress(status);
+        return;
+    }
+
+    if (status.state === 'installing') {
+        setUpdateOverlayVisible(true);
+        const overlay = ensureUpdateOverlay();
+        overlay.title.textContent = 'Installing update';
+        overlay.message.textContent = 'The download is complete. N-Way Compare is restarting to finish the installation.';
+        updateOverlayProgress({ percent: 100 });
+        return;
+    }
+
+    if (status.state === 'error') {
+        setUpdateOverlayVisible(true);
+        const overlay = ensureUpdateOverlay();
+        overlay.title.textContent = 'Update failed';
+        overlay.message.textContent = status.message || 'The update could not be completed.';
+        overlay.progressBar.style.width = '100%';
+        overlay.meta.textContent = 'You can continue using the current version.';
+
+        setTimeout(() => {
+            setUpdateOverlayVisible(false);
+        }, 4000);
+        return;
+    }
+
+    if (status.state === 'idle') {
+        setUpdateOverlayVisible(false);
+    }
 }
 
 function waitForNextPaint() {
@@ -1847,6 +1980,10 @@ window.runCmd = runCmd;
 window.saveConfig = saveConfig;
 window.loadConfig = loadConfig;
 window.scan = scan;
+
+if (window.api.onUpdateStatus) {
+    window.api.onUpdateStatus(handleUpdateStatus);
+}
 
 document.getElementById('addFolderBtn').addEventListener('click', async () => {
     const input = appendFolderInputField('');

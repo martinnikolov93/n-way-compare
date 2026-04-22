@@ -52,6 +52,14 @@ function setUpdateProgress(value) {
     }
 }
 
+function sendUpdateStatus(status) {
+    const ownerWindow = getUpdateDialogWindow();
+
+    if (ownerWindow) {
+        ownerWindow.webContents.send('update-status', status);
+    }
+}
+
 function configureAutoUpdater() {
     if (!app.isPackaged) {
         return;
@@ -84,6 +92,13 @@ function configureAutoUpdater() {
 
             updateDownloadInProgress = true;
             setUpdateProgress(2);
+            sendUpdateStatus({
+                state: 'downloading',
+                version: info.version || null,
+                percent: 0,
+                transferred: 0,
+                total: 0
+            });
             autoUpdater.downloadUpdate();
         } finally {
             updatePromptOpen = false;
@@ -94,10 +109,22 @@ function configureAutoUpdater() {
         if (typeof progress?.percent === 'number') {
             setUpdateProgress(Math.max(0, Math.min(1, progress.percent / 100)));
         }
+
+        sendUpdateStatus({
+            state: 'progress',
+            percent: typeof progress?.percent === 'number' ? progress.percent : 0,
+            transferred: progress?.transferred || 0,
+            total: progress?.total || 0,
+            bytesPerSecond: progress?.bytesPerSecond || 0
+        });
     });
 
     autoUpdater.on('update-downloaded', () => {
         updateDownloadInProgress = false;
+        sendUpdateStatus({
+            state: 'installing',
+            percent: 100
+        });
         setUpdateProgress(-1);
         autoUpdater.quitAndInstall(false, true);
     });
@@ -109,8 +136,16 @@ function configureAutoUpdater() {
 
         if (!shouldNotify) {
             console.error('Update check failed:', err);
+            sendUpdateStatus({
+                state: 'idle'
+            });
             return;
         }
+
+        sendUpdateStatus({
+            state: 'error',
+            message: err?.message || String(err)
+        });
 
         await showUpdateMessage({
             type: 'error',
@@ -118,6 +153,10 @@ function configureAutoUpdater() {
             title: 'Update failed',
             message: 'N-Way Compare could not complete the update.',
             detail: err?.message || String(err)
+        });
+
+        sendUpdateStatus({
+            state: 'idle'
         });
     });
 
