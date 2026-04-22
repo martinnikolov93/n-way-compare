@@ -438,7 +438,105 @@
                 return [{ start: 0, end: sourceText.length }];
             }
 
+            const tokenRanges = this.getTokenDifferenceRanges(
+                sourceText.slice(start, end),
+                compareText.slice(prefix, compareText.length - suffix),
+                start
+            );
+
+            if (tokenRanges.length) {
+                return tokenRanges;
+            }
+
             return [{ start, end }];
+        }
+
+        tokenizeInlineDifference(text) {
+            const tokens = [];
+            const pattern = /\s+|[A-Za-z_$][A-Za-z0-9_$]*|\d+(?:\.\d+)?|./g;
+            let match = pattern.exec(text);
+
+            while (match) {
+                tokens.push({
+                    value: match[0],
+                    start: match.index,
+                    end: match.index + match[0].length
+                });
+                match = pattern.exec(text);
+            }
+
+            return tokens;
+        }
+
+        getTokenDifferenceRanges(sourceText, compareText, sourceOffset) {
+            if (!sourceText.length || !compareText.length) {
+                return [];
+            }
+
+            const sourceTokens = this.tokenizeInlineDifference(sourceText);
+            const compareTokens = this.tokenizeInlineDifference(compareText);
+            const product = sourceTokens.length * compareTokens.length;
+
+            if (
+                !sourceTokens.length ||
+                !compareTokens.length ||
+                sourceTokens.length > 1000 ||
+                compareTokens.length > 1000 ||
+                product > 120000
+            ) {
+                return [];
+            }
+
+            const matrix = Array.from(
+                { length: sourceTokens.length + 1 },
+                () => new Uint16Array(compareTokens.length + 1)
+            );
+
+            for (let sourceIndex = sourceTokens.length - 1; sourceIndex >= 0; sourceIndex -= 1) {
+                const row = matrix[sourceIndex];
+                const nextRow = matrix[sourceIndex + 1];
+
+                for (let compareIndex = compareTokens.length - 1; compareIndex >= 0; compareIndex -= 1) {
+                    row[compareIndex] = sourceTokens[sourceIndex].value === compareTokens[compareIndex].value
+                        ? nextRow[compareIndex + 1] + 1
+                        : Math.max(nextRow[compareIndex], row[compareIndex + 1]);
+                }
+            }
+
+            const ranges = [];
+            let sourceIndex = 0;
+            let compareIndex = 0;
+
+            while (sourceIndex < sourceTokens.length && compareIndex < compareTokens.length) {
+                if (sourceTokens[sourceIndex].value === compareTokens[compareIndex].value) {
+                    sourceIndex += 1;
+                    compareIndex += 1;
+                    continue;
+                }
+
+                if (matrix[sourceIndex + 1][compareIndex] >= matrix[sourceIndex][compareIndex + 1]) {
+                    const token = sourceTokens[sourceIndex];
+                    ranges.push({
+                        start: sourceOffset + token.start,
+                        end: sourceOffset + token.end
+                    });
+                    sourceIndex += 1;
+                    continue;
+                }
+
+                compareIndex += 1;
+            }
+
+            while (sourceIndex < sourceTokens.length) {
+                const token = sourceTokens[sourceIndex];
+                ranges.push({
+                    start: sourceOffset + token.start,
+                    end: sourceOffset + token.end
+                });
+                sourceIndex += 1;
+            }
+
+            return mergeRanges(ranges);
         }
 
         getChangedRangesForCell(row, paneIndex) {

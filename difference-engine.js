@@ -64,67 +64,6 @@
         return normalizeComparableLine(left.text) === normalizeComparableLine(right.text);
     }
 
-    function buildGreedyDiff(leftLines, rightLines) {
-        const ops = [];
-        let leftIndex = 0;
-        let rightIndex = 0;
-        const lookAhead = 40;
-
-        while (leftIndex < leftLines.length || rightIndex < rightLines.length) {
-            if (leftIndex < leftLines.length && rightIndex < rightLines.length && leftLines[leftIndex] === rightLines[rightIndex]) {
-                ops.push({ type: 'equal', aIndex: leftIndex, bIndex: rightIndex });
-                leftIndex += 1;
-                rightIndex += 1;
-                continue;
-            }
-
-            let insertedMatch = -1;
-            let deletedMatch = -1;
-
-            for (let step = 1; step <= lookAhead; step += 1) {
-                if (insertedMatch === -1 && rightIndex + step < rightLines.length && leftIndex < leftLines.length && leftLines[leftIndex] === rightLines[rightIndex + step]) {
-                    insertedMatch = step;
-                }
-
-                if (deletedMatch === -1 && leftIndex + step < leftLines.length && rightIndex < rightLines.length && leftLines[leftIndex + step] === rightLines[rightIndex]) {
-                    deletedMatch = step;
-                }
-
-                if (insertedMatch !== -1 || deletedMatch !== -1) {
-                    break;
-                }
-            }
-
-            if (insertedMatch !== -1 && (deletedMatch === -1 || insertedMatch <= deletedMatch)) {
-                for (let step = 0; step < insertedMatch; step += 1) {
-                    ops.push({ type: 'insert', bIndex: rightIndex });
-                    rightIndex += 1;
-                }
-                continue;
-            }
-
-            if (deletedMatch !== -1) {
-                for (let step = 0; step < deletedMatch; step += 1) {
-                    ops.push({ type: 'delete', aIndex: leftIndex });
-                    leftIndex += 1;
-                }
-                continue;
-            }
-
-            if (leftIndex < leftLines.length) {
-                ops.push({ type: 'delete', aIndex: leftIndex });
-                leftIndex += 1;
-            }
-
-            if (rightIndex < rightLines.length) {
-                ops.push({ type: 'insert', bIndex: rightIndex });
-                rightIndex += 1;
-            }
-        }
-
-        return ops;
-    }
-
     function buildExactDiff(leftLines, rightLines) {
         const leftLength = leftLines.length;
         const rightLength = rightLines.length;
@@ -176,6 +115,361 @@
         return ops;
     }
 
+    // Large sections need stable anchors beyond a short look-ahead. This mirrors
+    // Diffuse's patience-style approach so long inserted blocks stay contained.
+    function buildPatienceSubsequence(leftLines, rightLines) {
+        const leftValues = new Map();
+        const rightValues = new Map();
+
+        leftLines.forEach((line, index) => {
+            leftValues.set(line, leftValues.has(line) ? -1 : index);
+        });
+
+        rightLines.forEach((line, index) => {
+            rightValues.set(line, rightValues.has(line) ? -1 : index);
+        });
+
+        const pile = [];
+        const pointers = new Map();
+        const leftToRight = new Map();
+
+        rightLines.forEach((line) => {
+            const leftIndex = leftValues.has(line) ? leftValues.get(line) : -1;
+            const rightIndex = rightValues.has(line) ? rightValues.get(line) : -1;
+
+            if (leftIndex === -1 || rightIndex === -1) {
+                return;
+            }
+
+            leftToRight.set(leftIndex, rightIndex);
+
+            let start = 0;
+            let end = pile.length;
+
+            if (end && leftIndex > pile[end - 1]) {
+                start = end;
+            } else {
+                while (start < end) {
+                    const middle = Math.floor((start + end) / 2);
+                    if (leftIndex < pile[middle]) {
+                        end = middle;
+                    } else {
+                        start = middle + 1;
+                    }
+                }
+            }
+
+            if (start < pile.length) {
+                pile[start] = leftIndex;
+            } else {
+                pile.push(leftIndex);
+            }
+
+            if (start) {
+                pointers.set(leftIndex, pile[start - 1]);
+            }
+        });
+
+        const result = [];
+
+        if (pile.length) {
+            let leftIndex = pile[pile.length - 1];
+            result.push([leftIndex, leftToRight.get(leftIndex)]);
+
+            while (pointers.has(leftIndex)) {
+                leftIndex = pointers.get(leftIndex);
+                result.push([leftIndex, leftToRight.get(leftIndex)]);
+            }
+
+            result.reverse();
+        }
+
+        return result;
+    }
+
+    function buildLongestCommonBlockApprox(leftLines, rightLines) {
+        const leftCounts = new Map();
+        const rightLookup = new Map();
+
+        leftLines.forEach((line) => {
+            leftCounts.set(line, (leftCounts.get(line) || 0) + 1);
+        });
+
+        rightLines.forEach((line, index) => {
+            if (!rightLookup.has(line)) {
+                rightLookup.set(line, []);
+            }
+            rightLookup.get(line).push(index);
+        });
+
+        if (!Array.from(rightLookup.keys()).some(line => leftCounts.has(line))) {
+            return null;
+        }
+
+        const popular = new Set();
+        if (leftLines.length > 200) {
+            leftCounts.forEach((count, line) => {
+                if (count * 100 > leftLines.length) {
+                    popular.add(line);
+                }
+            });
+        }
+
+        if (rightLines.length > 200) {
+            rightLookup.forEach((indices, line) => {
+                if (indices.length * 100 > rightLines.length) {
+                    popular.add(line);
+                }
+            });
+        }
+
+        let previousMatches = new Map();
+        let maxLength = 0;
+        let maxIndices = [];
+
+        leftLines.forEach((line, leftIndex) => {
+            const indices = rightLookup.get(line);
+            const matches = new Map();
+
+            if (indices) {
+                if (popular.has(line)) {
+                    previousMatches.forEach((length, rightIndex) => {
+                        const nextRightIndex = rightIndex + 1;
+                        if (nextRightIndex < rightLines.length && rightLines[nextRightIndex] === line) {
+                            const nextLength = length + 1;
+                            matches.set(nextRightIndex, nextLength);
+                            if (nextLength >= maxLength) {
+                                if (nextLength === maxLength) {
+                                    maxIndices.push([leftIndex, nextRightIndex]);
+                                } else {
+                                    maxLength = nextLength;
+                                    maxIndices = [[leftIndex, nextRightIndex]];
+                                }
+                            }
+                        }
+                    });
+                } else {
+                    indices.forEach((rightIndex) => {
+                        const length = (previousMatches.get(rightIndex - 1) || 0) + 1;
+                        matches.set(rightIndex, length);
+                        if (length >= maxLength) {
+                            if (length === maxLength) {
+                                maxIndices.push([leftIndex, rightIndex]);
+                            } else {
+                                maxLength = length;
+                                maxIndices = [[leftIndex, rightIndex]];
+                            }
+                        }
+                    });
+                }
+            }
+
+            previousMatches = matches;
+        });
+
+        if (!maxIndices.length) {
+            return null;
+        }
+
+        let bestLeftIndex = 0;
+        let bestRightIndex = 0;
+        let bestLength = 0;
+
+        maxIndices.forEach(([leftIndex, rightIndex]) => {
+            let length = maxLength;
+            let startLeft = leftIndex + 1 - length;
+            let startRight = rightIndex + 1 - length;
+
+            while (startLeft && startRight && leftLines[startLeft - 1] === rightLines[startRight - 1]) {
+                startLeft -= 1;
+                startRight -= 1;
+                length += 1;
+            }
+
+            if (length > bestLength) {
+                bestLeftIndex = startLeft;
+                bestRightIndex = startRight;
+                bestLength = length;
+            }
+        });
+
+        return bestLength
+            ? { leftIndex: bestLeftIndex, rightIndex: bestRightIndex, length: bestLength }
+            : null;
+    }
+
+    function buildPatienceMatches(leftLines, rightLines) {
+        const matches = [];
+        const blocks = [{
+            leftStart: 0,
+            leftEnd: leftLines.length,
+            rightStart: 0,
+            rightEnd: rightLines.length,
+            matchIndex: 0
+        }];
+
+        while (blocks.length) {
+            const block = blocks.pop();
+            const leftSlice = leftLines.slice(block.leftStart, block.leftEnd);
+            const rightSlice = rightLines.slice(block.rightStart, block.rightEnd);
+            const pivots = buildPatienceSubsequence(leftSlice, rightSlice);
+
+            if (pivots.length) {
+                let leftStart = block.leftStart;
+                let rightStart = block.rightStart;
+                let matchIndex = block.matchIndex;
+
+                pivots.forEach(([pivotLeftOffset, pivotRightOffset]) => {
+                    const pivotLeft = pivotLeftOffset + block.leftStart;
+                    const pivotRight = pivotRightOffset + block.rightStart;
+
+                    if (leftStart > pivotLeft) {
+                        return;
+                    }
+
+                    let leftIndex = pivotLeft;
+                    let rightIndex = pivotRight;
+
+                    while (
+                        leftStart < leftIndex &&
+                        rightStart < rightIndex &&
+                        leftLines[leftIndex - 1] === rightLines[rightIndex - 1]
+                    ) {
+                        leftIndex -= 1;
+                        rightIndex -= 1;
+                    }
+
+                    if (leftStart < leftIndex && rightStart < rightIndex) {
+                        blocks.push({
+                            leftStart,
+                            leftEnd: leftIndex,
+                            rightStart,
+                            rightEnd: rightIndex,
+                            matchIndex
+                        });
+                    }
+
+                    leftStart = pivotLeft + 1;
+                    rightStart = pivotRight + 1;
+
+                    while (
+                        leftStart < block.leftEnd &&
+                        rightStart < block.rightEnd &&
+                        leftLines[leftStart] === rightLines[rightStart]
+                    ) {
+                        leftStart += 1;
+                        rightStart += 1;
+                    }
+
+                    matches.splice(matchIndex, 0, {
+                        leftIndex,
+                        rightIndex,
+                        length: leftStart - leftIndex
+                    });
+                    matchIndex += 1;
+                });
+
+                if (leftStart < block.leftEnd && rightStart < block.rightEnd) {
+                    blocks.push({
+                        leftStart,
+                        leftEnd: block.leftEnd,
+                        rightStart,
+                        rightEnd: block.rightEnd,
+                        matchIndex
+                    });
+                }
+                continue;
+            }
+
+            const fallback = buildLongestCommonBlockApprox(leftSlice, rightSlice);
+            if (fallback) {
+                const leftIndex = fallback.leftIndex + block.leftStart;
+                const rightIndex = fallback.rightIndex + block.rightStart;
+
+                if (block.leftStart < leftIndex && block.rightStart < rightIndex) {
+                    blocks.push({
+                        leftStart: block.leftStart,
+                        leftEnd: leftIndex,
+                        rightStart: block.rightStart,
+                        rightEnd: rightIndex,
+                        matchIndex: block.matchIndex
+                    });
+                }
+
+                matches.splice(block.matchIndex, 0, {
+                    leftIndex,
+                    rightIndex,
+                    length: fallback.length
+                });
+
+                const nextLeftStart = leftIndex + fallback.length;
+                const nextRightStart = rightIndex + fallback.length;
+
+                if (nextLeftStart < block.leftEnd && nextRightStart < block.rightEnd) {
+                    blocks.push({
+                        leftStart: nextLeftStart,
+                        leftEnd: block.leftEnd,
+                        rightStart: nextRightStart,
+                        rightEnd: block.rightEnd,
+                        matchIndex: block.matchIndex + 1
+                    });
+                }
+            }
+        }
+
+        return matches.sort((left, right) => {
+            if (left.leftIndex !== right.leftIndex) {
+                return left.leftIndex - right.leftIndex;
+            }
+            return left.rightIndex - right.rightIndex;
+        });
+    }
+
+    function buildDiffFromMatches(leftLines, rightLines, matches) {
+        const ops = [];
+        let leftIndex = 0;
+        let rightIndex = 0;
+
+        matches.forEach(match => {
+            while (leftIndex < match.leftIndex) {
+                ops.push({ type: 'delete', aIndex: leftIndex });
+                leftIndex += 1;
+            }
+
+            while (rightIndex < match.rightIndex) {
+                ops.push({ type: 'insert', bIndex: rightIndex });
+                rightIndex += 1;
+            }
+
+            for (let offset = 0; offset < match.length; offset += 1) {
+                ops.push({
+                    type: 'equal',
+                    aIndex: match.leftIndex + offset,
+                    bIndex: match.rightIndex + offset
+                });
+            }
+
+            leftIndex = match.leftIndex + match.length;
+            rightIndex = match.rightIndex + match.length;
+        });
+
+        while (leftIndex < leftLines.length) {
+            ops.push({ type: 'delete', aIndex: leftIndex });
+            leftIndex += 1;
+        }
+
+        while (rightIndex < rightLines.length) {
+            ops.push({ type: 'insert', bIndex: rightIndex });
+            rightIndex += 1;
+        }
+
+        return ops;
+    }
+
+    function buildPatienceDiff(leftLines, rightLines) {
+        return buildDiffFromMatches(leftLines, rightLines, buildPatienceMatches(leftLines, rightLines));
+    }
+
     function buildDiff(leftLines, rightLines) {
         let prefix = 0;
         let leftEnd = leftLines.length;
@@ -201,7 +495,7 @@
         const product = middleLeft.length * middleRight.length;
         const middleOps = product <= EXACT_DIFF_PRODUCT_LIMIT
             ? buildExactDiff(middleLeft, middleRight)
-            : buildGreedyDiff(middleLeft, middleRight);
+            : buildPatienceDiff(middleLeft, middleRight);
 
         middleOps.forEach(op => {
             if (op.type === 'equal') {
