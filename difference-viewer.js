@@ -1672,8 +1672,62 @@
                 ? clamp((clientY - rect.top) / rect.height, 0, 1)
                 : 0;
             const targetRow = clamp(Math.floor(ratio * tab.rows.length), 0, tab.rows.length - 1);
-            this.scrollToRow(targetRow, { behavior: 'auto', block: 'center' });
+            this.scrollToRowCenter(targetRow);
             this.updateOverviewViewport();
+        }
+
+        scrollToRowCenter(rowIndex) {
+            if (!this.gridScroll || !this.rowsHostEl) {
+                return;
+            }
+
+            const viewportHeight = this.gridScroll.clientHeight;
+            const headerHeight = this.headersContainerEl?.offsetHeight || 0;
+            const scrollbarHeight = this.scrollbarRowEl?.offsetHeight || 0;
+            const rowsTopOffset = this.rowsHostEl.offsetTop || 0;
+            const rowHeight = this.virtualRowHeight;
+            const visibleHeight = Math.max(rowHeight, viewportHeight - headerHeight - scrollbarHeight);
+            const rowCenter = (rowIndex * rowHeight) + (rowHeight / 2);
+            const nextTop = rowsTopOffset + rowCenter - headerHeight - (visibleHeight / 2);
+            const maxTop = Math.max(0, this.gridScroll.scrollHeight - viewportHeight);
+            const targetTop = clamp(Math.round(nextTop), 0, maxTop);
+
+            this.gridScroll.scrollTop = targetTop;
+            this.renderVirtualRows(true);
+            this.centerRenderedRowIfPossible(rowIndex);
+            this.updateOverviewViewport();
+        }
+
+        centerRenderedRowIfPossible(rowIndex) {
+            const rowEl = this.rowElements[rowIndex];
+
+            if (!this.gridScroll || !rowEl?.isConnected) {
+                return;
+            }
+
+            const gridRect = this.gridScroll.getBoundingClientRect();
+            const headerRect = this.headersContainerEl?.getBoundingClientRect();
+            const scrollbarRect = this.scrollbarRowEl?.getBoundingClientRect();
+            const rowRect = rowEl.getBoundingClientRect();
+            const visibleTop = headerRect
+                ? Math.max(gridRect.top, headerRect.bottom)
+                : gridRect.top;
+            const visibleBottom = scrollbarRect
+                ? Math.min(gridRect.bottom, scrollbarRect.top)
+                : gridRect.bottom;
+            const visibleCenter = visibleTop + ((visibleBottom - visibleTop) / 2);
+            const rowCenter = rowRect.top + (rowRect.height / 2);
+            const maxTop = Math.max(0, this.gridScroll.scrollHeight - this.gridScroll.clientHeight);
+            const nextTop = clamp(
+                Math.round(this.gridScroll.scrollTop + (rowCenter - visibleCenter)),
+                0,
+                maxTop
+            );
+
+            if (Math.abs(nextTop - this.gridScroll.scrollTop) > 1) {
+                this.gridScroll.scrollTop = nextTop;
+                this.renderVirtualRows(true);
+            }
         }
 
         handleOverviewPointerDown(event) {

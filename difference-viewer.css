@@ -455,7 +455,7 @@
 }
 
 .difference-cell.is-diff-row {
-  background: var(--diff-row-red-soft);
+  background: var(--diff-panel);
 }
 
 .difference-cell.is-active-pane {
@@ -485,7 +485,7 @@
 }
 
 .difference-cell.is-selected.is-diff-row {
-  background: var(--diff-row-red-selected-soft);
+  background: var(--diff-row-selected);
 }
 
 .difference-cell.is-selected.is-active-pane.is-diff-row {
@@ -677,13 +677,13 @@
   position: absolute;
   left: 0;
   right: 0;
-  background: rgba(237, 113, 113, 0.35);
+  display: none;
 }
 
 .difference-overview-lanes {
   display: grid;
   column-gap: 0;
-  padding: 0 6px;
+  padding: 0;
   box-sizing: border-box;
 }
 
@@ -714,8 +714,8 @@
 }
 
 .difference-overview-selection {
-  left: 3px;
-  right: 3px;
+  left: 0;
+  right: 0;
   z-index: 4;
   background: rgba(70, 119, 199, 0.2);
   border-top: 1px solid rgba(44, 83, 153, 0.75);
@@ -760,6 +760,6 @@
 
   .difference-overview-lanes {
     column-gap: 1px;
-    padding-inline: 4px;
+    padding-inline: 0;
   }
 }
