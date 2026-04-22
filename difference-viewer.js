@@ -1556,7 +1556,18 @@
 
                     if (changed) {
                         if (openSegment) {
-                            openSegment.missing = openSegment.missing && missing;
+                            if (openSegment.missing !== missing) {
+                                openSegment.end = rowIndex - 1;
+                                segmentsByPane[paneIndex].push(openSegment);
+                                openSegments[paneIndex] = {
+                                    start: rowIndex,
+                                    end: rowIndex,
+                                    missing
+                                };
+                                return;
+                            }
+
+                            openSegment.end = rowIndex;
                         } else {
                             openSegments[paneIndex] = {
                                 start: rowIndex,
@@ -1568,7 +1579,6 @@
                     }
 
                     if (openSegment) {
-                        openSegment.end = rowIndex - 1;
                         segmentsByPane[paneIndex].push(openSegment);
                         openSegments[paneIndex] = null;
                     }
@@ -1577,7 +1587,6 @@
 
             openSegments.forEach((segment, paneIndex) => {
                 if (segment) {
-                    segment.end = tab.rows.length - 1;
                     segmentsByPane[paneIndex].push(segment);
                 }
             });
