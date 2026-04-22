@@ -14,8 +14,10 @@ Use the folder inputs at the top of the app to define the roots that participate
 | --- | --- |
 | Add Folder | Adds a new folder input and opens the folder picker. If the input already contains a path, the picker opens from that location when possible. |
 | Folder picker icon | Opens the folder picker for that specific input. |
+| Folder X button | Removes that folder input from the comparison. At least two folder inputs are kept available. |
+| Exclude files and folders | Skips matching relative paths during scan and folder watching. Use one pattern per line, such as `node_modules`, `dist`, or `*.log`. |
 | Load Config | Loads a saved JSON config with folder paths, then starts a scan automatically. |
-| Save Config | Saves the current folder paths as a JSON config. |
+| Save Config | Saves the current folder paths and exclusion patterns as a JSON config. |
 | Scan | Scans all configured folders and refreshes the comparison tree. |
 | Run CMD | Runs the command from the command input once in each configured root folder. |
 
@@ -71,6 +73,8 @@ Use the radio button to choose the source folder. Use checkboxes to choose targe
 ### Scanning Behavior
 
 The app watches the configured folders for changes. When files or folders change, it refreshes the comparison tree while preserving vertical and horizontal scroll position. Incremental updates are used where possible so small changes do not require a full rerender.
+
+Exclusion patterns are applied before entries are added to the comparison map. A plain name such as `node_modules` matches any path segment with that name, `*.log` matches file or folder names by basename, and path-like patterns such as `src/generated` skip that relative subtree.
 
 ## Difference Viewer
 

@@ -1,6 +1,6 @@
 {
   "name": "n-way-compare",
-  "version": "1.0.6",
+  "version": "1.0.8",
   "main": "main.js",
   "scripts": {
     "start": "electron .",

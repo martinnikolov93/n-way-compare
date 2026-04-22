@@ -435,7 +435,7 @@
             const start = prefix;
             const end = sourceText.length - suffix;
             if (end <= start) {
-                return [{ start: 0, end: sourceText.length }];
+                return [];
             }
 
             const tokenRanges = this.getTokenDifferenceRanges(
@@ -548,16 +548,19 @@
             const ranges = [];
             const leftCell = row.cells[paneIndex - 1];
             const rightCell = row.cells[paneIndex + 1];
+            let comparedExistingCell = false;
 
             if (cell.changedLeft && leftCell && !leftCell.missing) {
+                comparedExistingCell = true;
                 ranges.push(...this.getDifferenceRanges(cell.text, leftCell.text));
             }
 
             if (cell.changedRight && rightCell && !rightCell.missing) {
+                comparedExistingCell = true;
                 ranges.push(...this.getDifferenceRanges(cell.text, rightCell.text));
             }
 
-            if ((cell.changedLeft || cell.changedRight) && !ranges.length) {
+            if ((cell.changedLeft || cell.changedRight) && !ranges.length && !comparedExistingCell) {
                 ranges.push({ start: 0, end: cell.text.length });
             }
 

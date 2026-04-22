@@ -10,6 +10,7 @@ let statsRefreshTimer = null;
 
 const collapseState = {};
 let lastWatchedDirs = [];
+let lastWatchedExclusions = [];
 let scanPromise = null;
 let scanQueued = false;
 let queuedResetCache = false;
@@ -30,13 +31,55 @@ function getDirs() {
     return Array.from(inputs).map(input => input.value.trim()).filter(Boolean);
 }
 
+function getExclusionPatterns() {
+    const input = document.getElementById('exclusionInput');
+    if (!input) {
+        return [];
+    }
+
+    return input.value
+        .split(/[\n,;]+/)
+        .map(pattern => pattern.trim())
+        .filter(Boolean);
+}
+
+function setExclusionPatterns(patterns = []) {
+    const input = document.getElementById('exclusionInput');
+    if (!input) {
+        return;
+    }
+
+    input.value = Array.isArray(patterns)
+        ? patterns.map(pattern => String(pattern).trim()).filter(Boolean).join('\n')
+        : '';
+}
+
 function getFoldersContainer() {
     return document.getElementById('folders');
 }
 
 function refreshFolderInputPlaceholders() {
-    document.querySelectorAll('.folder-input').forEach((input, index) => {
+    const fields = Array.from(document.querySelectorAll('.folder-input-shell'));
+    const canRemove = fields.length > 2;
+
+    fields.forEach((field, index) => {
+        const input = field.querySelector('.folder-input');
+        const removeButton = field.querySelector('.folder-remove-btn');
+
+        if (!input) {
+            return;
+        }
+
         input.placeholder = `Folder ${index + 1}`;
+
+        if (removeButton) {
+            removeButton.disabled = !canRemove;
+            removeButton.title = canRemove ? 'Remove folder from comparison' : 'At least two folders are required';
+            removeButton.setAttribute(
+                'aria-label',
+                canRemove ? `Remove folder ${index + 1}` : 'At least two folders are required'
+            );
+        }
     });
 }
 
@@ -76,6 +119,28 @@ function createFolderInputField(value = '') {
         input.title = input.value.trim();
     });
 
+    const actions = document.createElement('div');
+    actions.className = 'folder-input-actions';
+
+    const removeButton = document.createElement('button');
+    removeButton.type = 'button';
+    removeButton.className = 'folder-remove-btn';
+    removeButton.title = 'Remove folder from comparison';
+    removeButton.setAttribute('aria-label', 'Remove folder from comparison');
+    removeButton.textContent = 'x';
+    removeButton.addEventListener('click', () => {
+        const foldersContainer = getFoldersContainer();
+        if (foldersContainer.children.length <= 2) {
+            input.value = '';
+            input.title = '';
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            return;
+        }
+
+        wrapper.remove();
+        refreshFolderInputPlaceholders();
+    });
+
     const pickerButton = document.createElement('button');
     pickerButton.type = 'button';
     pickerButton.className = 'folder-picker-btn';
@@ -91,7 +156,9 @@ function createFolderInputField(value = '') {
     });
 
     wrapper.appendChild(input);
-    wrapper.appendChild(pickerButton);
+    actions.appendChild(pickerButton);
+    actions.appendChild(removeButton);
+    wrapper.appendChild(actions);
 
     return wrapper;
 }
@@ -569,6 +636,7 @@ async function performScan(resetCache = false) {
 
     try {
         dirs = getDirs();
+        const exclusions = getExclusionPatterns();
 
         if (dirs.length < 2) {
             return alert('Please enter at least 2 folders');
@@ -578,7 +646,7 @@ async function performScan(resetCache = false) {
             Object.keys(collapseState).forEach(key => delete collapseState[key]);
         }
 
-        const scanResult = await window.api.scan(dirs);
+        const scanResult = await window.api.scan({ dirs, exclusions });
         const scanUpdate = applyIncrementalScanResult(scanResult);
         const shouldRender = scanUpdate.changed || resetCache;
 
@@ -606,9 +674,10 @@ async function performScan(resetCache = false) {
             preservedScrollState = null;
         }
 
-        if (!arraysEqual(dirs, lastWatchedDirs)) {
-            window.api.watchFolders(dirs);
+        if (!arraysEqual(dirs, lastWatchedDirs) || !arraysEqual(exclusions, lastWatchedExclusions)) {
+            window.api.watchFolders({ dirs, exclusions });
             lastWatchedDirs = [...dirs];
+            lastWatchedExclusions = [...exclusions];
         }
     } catch (err) {
         preservedScrollState = null;
@@ -1924,11 +1993,20 @@ async function loadConfig() {
         const data = await window.api.loadConfig();
         if (!data) return;
 
+        let folders = data;
+        let exclusions = [];
+
         if (!Array.isArray(data)) {
-            return alert('Invalid config format. Expected array.');
+            if (!data || typeof data !== 'object' || !Array.isArray(data.folders)) {
+                return alert('Invalid config format. Expected an array or { folders, exclusions }.');
+            }
+
+            folders = data.folders;
+            exclusions = Array.isArray(data.exclusions) ? data.exclusions : [];
         }
 
-        setFolderInputs(data);
+        setFolderInputs(folders);
+        setExclusionPatterns(exclusions);
 
         if (getDirs().length >= 2) {
             setScanLoading(true);
@@ -1946,12 +2024,16 @@ async function saveConfig() {
         const paths = Array.from(inputs)
             .map(input => input.value.trim())
             .filter(Boolean);
+        const exclusions = getExclusionPatterns();
 
         if (paths.length < 2) {
             return alert('Add at least 2 folders to save config');
         }
 
-        await window.api.saveConfig(paths);
+        await window.api.saveConfig({
+            folders: paths,
+            exclusions
+        });
         alert('Config saved!');
     } catch (err) {
         alert('Error saving config: ' + err.message);

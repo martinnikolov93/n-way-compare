@@ -178,16 +178,144 @@ let activeScanState = null;
 const WATCH_DEBOUNCE_MS = 120;
 const WATCH_MAX_WAIT_MS = 700;
 
-function getDirsSignature(baseDirs) {
-    return baseDirs.map(dir => path.resolve(dir)).join('||');
+function normalizeExclusionPattern(pattern = '') {
+    return String(pattern)
+        .trim()
+        .replace(/\\/g, '/')
+        .replace(/^\/+|\/+$/g, '');
 }
 
-function createScanState(baseDirs) {
-    const resolvedDirs = baseDirs.map(dir => path.resolve(dir));
+function normalizePathForMatch(relativePath = '') {
+    return String(relativePath)
+        .replace(/\\/g, '/')
+        .replace(/^\/+|\/+$/g, '');
+}
+
+function escapeRegExp(value) {
+    return value.replace(/[|\\{}()[\]^$+?.]/g, '\\$&');
+}
+
+function globToRegExp(pattern) {
+    const normalized = normalizeExclusionPattern(pattern);
+    let source = '';
+
+    for (let index = 0; index < normalized.length; index += 1) {
+        const char = normalized[index];
+        const nextChar = normalized[index + 1];
+
+        if (char === '*' && nextChar === '*') {
+            source += '.*';
+            index += 1;
+            continue;
+        }
+
+        if (char === '*') {
+            source += '[^/]*';
+            continue;
+        }
+
+        if (char === '?') {
+            source += '[^/]';
+            continue;
+        }
+
+        source += escapeRegExp(char);
+    }
+
+    return new RegExp(`^${source}$`, 'i');
+}
+
+function createExclusionMatcher(patterns = []) {
+    const normalizedPatterns = Array.from(new Set(
+        (Array.isArray(patterns) ? patterns : [])
+            .map(normalizeExclusionPattern)
+            .filter(Boolean)
+    ));
+
+    const rules = normalizedPatterns.map(pattern => {
+        const hasSlash = pattern.includes('/');
+        const hasWildcard = /[*?]/.test(pattern);
+
+        return {
+            pattern,
+            hasSlash,
+            hasWildcard,
+            regex: hasWildcard ? globToRegExp(pattern) : null
+        };
+    });
 
     return {
-        signature: getDirsSignature(resolvedDirs),
+        patterns: normalizedPatterns,
+        signature: [...normalizedPatterns].sort((left, right) => left.localeCompare(right)).join('||'),
+        matches(relativePath = '') {
+            const normalizedPath = normalizePathForMatch(relativePath);
+            if (!normalizedPath) {
+                return false;
+            }
+
+            const segments = normalizedPath.split('/');
+            const basename = segments[segments.length - 1];
+
+            return rules.some(rule => {
+                if (rule.hasWildcard) {
+                    if (rule.hasSlash && rule.pattern.endsWith('/**')) {
+                        const subtreeRoot = rule.pattern.slice(0, -3);
+                        if (normalizedPath === subtreeRoot || normalizedPath.startsWith(`${subtreeRoot}/`)) {
+                            return true;
+                        }
+                    }
+
+                    return rule.hasSlash
+                        ? rule.regex.test(normalizedPath)
+                        : rule.regex.test(basename);
+                }
+
+                if (rule.hasSlash) {
+                    return normalizedPath === rule.pattern || normalizedPath.startsWith(`${rule.pattern}/`);
+                }
+
+                return segments.includes(rule.pattern);
+            });
+        }
+    };
+}
+
+function normalizeScanRequest(input) {
+    if (Array.isArray(input)) {
+        return {
+            dirs: input,
+            exclusions: []
+        };
+    }
+
+    if (!input || typeof input !== 'object') {
+        return {
+            dirs: [],
+            exclusions: []
+        };
+    }
+
+    return {
+        dirs: Array.isArray(input.dirs) ? input.dirs : [],
+        exclusions: Array.isArray(input.exclusions) ? input.exclusions : []
+    };
+}
+
+function getDirsSignature(baseDirs, exclusions = []) {
+    const exclusionSignature = Array.isArray(exclusions)
+        ? [...exclusions].map(normalizeExclusionPattern).filter(Boolean).sort((left, right) => left.localeCompare(right)).join('||')
+        : '';
+    return `${baseDirs.map(dir => path.resolve(dir)).join('||')}::exclusions::${exclusionSignature}`;
+}
+
+function createScanState(baseDirs, exclusions = []) {
+    const resolvedDirs = baseDirs.map(dir => path.resolve(dir));
+    const exclusionMatcher = createExclusionMatcher(exclusions);
+
+    return {
+        signature: getDirsSignature(resolvedDirs, exclusionMatcher.patterns),
         baseDirs: resolvedDirs,
+        exclusionMatcher,
         map: {},
         entriesByDir: resolvedDirs.map(() => new Map()),
         dirtyRootsByDir: resolvedDirs.map(() => new Set([''])),
@@ -201,6 +329,10 @@ function normalizeRelativePath(relativePath) {
     }
 
     return path.normalize(relativePath);
+}
+
+function isExcludedRelativePath(state, relativePath) {
+    return Boolean(state?.exclusionMatcher?.matches(relativePath));
 }
 
 function isSameOrDescendantPath(candidate, root) {
@@ -218,6 +350,10 @@ function markStateDirty(state, dirIndex, relativePath = '') {
     }
 
     const normalizedPath = normalizeRelativePath(relativePath);
+
+    if (normalizedPath && isExcludedRelativePath(state, normalizedPath)) {
+        return;
+    }
 
     if (!normalizedPath) {
         dirtyRoots.clear();
@@ -265,9 +401,30 @@ function markPathsDirty(pathsToMark) {
     pathsToMark.forEach(fullPath => markPathDirty(fullPath));
 }
 
-function getWatcherIgnoreReason(event, changedPath, watchedFolders) {
+function isExcludedWatchedPath(changedPath, watchedFolders, exclusionMatcher) {
+    if (!changedPath || !exclusionMatcher) {
+        return false;
+    }
+
+    const resolvedPath = path.resolve(changedPath);
+
+    return watchedFolders.some(folder => {
+        const relativePath = path.relative(path.resolve(folder), resolvedPath);
+        if (relativePath === '' || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+            return false;
+        }
+
+        return exclusionMatcher.matches(relativePath);
+    });
+}
+
+function getWatcherIgnoreReason(event, changedPath, watchedFolders, exclusionMatcher = null) {
     if (!changedPath) {
         return 'missing-path';
+    }
+
+    if (isExcludedWatchedPath(changedPath, watchedFolders, exclusionMatcher)) {
+        return 'excluded-path';
     }
 
     const resolvedPath = path.resolve(changedPath);
@@ -290,8 +447,8 @@ function getWatcherIgnoreReason(event, changedPath, watchedFolders) {
     return null;
 }
 
-function shouldIgnoreWatcherEvent(event, changedPath, watchedFolders) {
-    return Boolean(getWatcherIgnoreReason(event, changedPath, watchedFolders));
+function shouldIgnoreWatcherEvent(event, changedPath, watchedFolders, exclusionMatcher = null) {
+    return Boolean(getWatcherIgnoreReason(event, changedPath, watchedFolders, exclusionMatcher));
 }
 
 function setStateEntry(state, dirIndex, relativePath, entry) {
@@ -320,12 +477,15 @@ function removeStateEntry(state, dirIndex, relativePath) {
 }
 
 // С„СѓРЅРєС†РёСЏ Р·Р° watch
-function watchFolders(folders) {
+function watchFolders(folders, exclusions = []) {
     if (folderWatcher) {
         folderWatcher.close();
     }
 
+    const exclusionMatcher = createExclusionMatcher(exclusions);
+
     folderWatcher = chokidar.watch(folders, {
+        ignored: changedPath => isExcludedWatchedPath(changedPath, folders, exclusionMatcher),
         ignoreInitial: true,
         persistent: true,
         depth: 99
@@ -368,7 +528,7 @@ function watchFolders(folders) {
     };
 
     folderWatcher.on('all', (event, changedPath) => {
-        const ignoreReason = getWatcherIgnoreReason(event, changedPath, folders);
+        const ignoreReason = getWatcherIgnoreReason(event, changedPath, folders, exclusionMatcher);
 
         if (ignoreReason) {
             return;
@@ -380,8 +540,9 @@ function watchFolders(folders) {
     });
 }
 
-ipcMain.handle('watch-folders', async (e, folders) => {
-    watchFolders(folders);
+ipcMain.handle('watch-folders', async (e, input) => {
+    const { dirs, exclusions } = normalizeScanRequest(input);
+    watchFolders(dirs, exclusions);
 });
 
 function hashFile(filePath) {
@@ -410,6 +571,10 @@ function collectDirectoryEntries(state, dirIndex, currentDir, rel = '', options 
     dirEntries.forEach(entry => {
         const full = path.join(currentDir, entry.name);
         const relative = rel ? path.join(rel, entry.name) : entry.name;
+
+        if (isExcludedRelativePath(state, relative)) {
+            return;
+        }
 
         if (entry.isDirectory()) {
             setStateEntry(state, dirIndex, relative, {
@@ -502,6 +667,10 @@ function removeEntriesUnderRoot(state, dirIndex, relativeRoot, impactedFiles, im
 function scanExistingRoot(state, dirIndex, relativeRoot, impactedFiles, impactedPaths) {
     const baseDir = state.baseDirs[dirIndex];
     const fullPath = relativeRoot ? path.join(baseDir, relativeRoot) : baseDir;
+
+    if (relativeRoot && isExcludedRelativePath(state, relativeRoot)) {
+        return;
+    }
 
     if (!fs.existsSync(fullPath)) {
         return;
@@ -655,11 +824,11 @@ function applyDirtyUpdates(state) {
     return buildIncrementalPayload(state, impactedPaths);
 }
 
-function scanDirs(baseDirs) {
-    const signature = getDirsSignature(baseDirs);
+function scanDirs(baseDirs, exclusions = []) {
+    const signature = getDirsSignature(baseDirs, exclusions);
 
     if (!activeScanState || activeScanState.signature !== signature) {
-        activeScanState = createScanState(baseDirs);
+        activeScanState = createScanState(baseDirs, exclusions);
     }
 
     if (!activeScanState.initialized) {
@@ -780,7 +949,10 @@ ipcMain.handle('run-command', async (e, { dirs, command }) => {
     }
 });
 
-ipcMain.handle('scan', async (e, dirs) => scanDirs(dirs));
+ipcMain.handle('scan', async (e, input) => {
+    const { dirs, exclusions } = normalizeScanRequest(input);
+    return scanDirs(dirs, exclusions);
+});
 
 ipcMain.handle('open-diffuse', async (e, files) => {
     // Windows-safe execution using spawn instead of exec

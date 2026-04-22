@@ -44,6 +44,17 @@
         <input class="folder-input" placeholder="Folder 2" />
       </div>
 
+      <div class="exclusions-block">
+        <label class="exclusions-label" for="exclusionInput">Exclude files and folders</label>
+        <textarea
+          id="exclusionInput"
+          class="exclusions-input"
+          rows="3"
+          spellcheck="false"
+          placeholder="One pattern per line, e.g.&#10;node_modules&#10;dist&#10;*.log"></textarea>
+        <p class="exclusions-help">Matched paths are skipped during scan and ignored by folder watching.</p>
+      </div>
+
       <div class="workspace-toolbar">
         <div id="scanLoader" class="scan-loader" aria-live="polite">
           <span class="scan-loader-dot"></span>

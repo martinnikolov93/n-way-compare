@@ -209,7 +209,7 @@ body {
 }
 
 .folder-input {
-  padding-right: 58px;
+  padding-right: 100px;
 }
 
 .folder-input:focus,
@@ -219,15 +219,22 @@ body {
   box-shadow: 0 0 0 3px rgba(52, 102, 196, 0.1);
 }
 
-.folder-picker-btn {
+.folder-input-actions {
   position: absolute;
   top: 6px;
   right: 6px;
   bottom: 6px;
   display: inline-flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.folder-picker-btn,
+.folder-remove-btn {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
+  width: 38px;
   padding: 0;
   border: 1px solid rgba(173, 186, 207, 0.92);
   border-radius: 12px;
@@ -237,13 +244,34 @@ body {
   transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
 }
 
-.folder-picker-btn:hover {
+.folder-picker-btn:hover,
+.folder-remove-btn:hover:not(:disabled) {
   border-color: rgba(86, 121, 188, 0.82);
   background: #edf3ff;
   color: #204da7;
 }
 
-.folder-picker-btn:focus-visible {
+.folder-remove-btn {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  color: #8a3f3f;
+  background: #fff7f7;
+}
+
+.folder-remove-btn:hover:not(:disabled) {
+  border-color: rgba(194, 92, 92, 0.72);
+  background: #ffecec;
+  color: #b32626;
+}
+
+.folder-remove-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.folder-picker-btn:focus-visible,
+.folder-remove-btn:focus-visible {
   outline: none;
   border-color: rgba(52, 102, 196, 0.8);
   box-shadow: 0 0 0 3px rgba(52, 102, 196, 0.14);
@@ -254,6 +282,46 @@ body {
   width: 17px;
   height: 17px;
   fill: currentColor;
+}
+
+.exclusions-block {
+  padding: 14px 22px 0;
+}
+
+.exclusions-label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #51627d;
+}
+
+.exclusions-input {
+  width: 100%;
+  min-height: 76px;
+  resize: vertical;
+  border: 1px solid rgba(173, 186, 207, 0.92);
+  border-radius: 14px;
+  padding: 11px 13px;
+  font-size: 13px;
+  line-height: 1.35;
+  font-family: Consolas, "Courier New", monospace;
+  color: var(--app-text);
+  background: #ffffff;
+}
+
+.exclusions-input:focus {
+  outline: none;
+  border-color: rgba(52, 102, 196, 0.8);
+  box-shadow: 0 0 0 3px rgba(52, 102, 196, 0.1);
+}
+
+.exclusions-help {
+  margin: 7px 0 0;
+  font-size: 12px;
+  color: #68778f;
 }
 
 .workspace-toolbar,
