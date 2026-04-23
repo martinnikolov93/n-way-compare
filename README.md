@@ -44,6 +44,8 @@ After a scan, the tree shows files and folders found across the configured roots
 | Expand All | Expands every folder in the tree. |
 | Expand Diff | Expands only folders that contain differences. |
 | Collapse All | Collapses the tree. |
+| Undo | Reverts the most recent main-page copy or delete action. |
+| Redo | Reapplies the most recently undone main-page action. |
 | Folder chevron | Expands or collapses one folder. |
 
 ### File Actions
@@ -69,6 +71,12 @@ Folder rows support bulk actions.
 | Delete | Deletes the checked existing folders after confirmation. |
 
 Use the radio button to choose the source folder. Use checkboxes to choose target folder locations.
+
+### Main Page Undo and Redo
+
+Main-page `Copy` and `Delete` actions are stored in an in-memory action history. Each action keeps temporary snapshots of the affected target paths, so `Undo` can restore deleted items or previous overwritten target content, and `Redo` can reapply the same result.
+
+Use the toolbar buttons, `Ctrl+Z`, `Ctrl+Y`, or `Ctrl+Shift+Z` while focus is not inside an input field. History is kept for the current app session and is cleared when the app closes.
 
 ### Scanning Behavior
 

@@ -1014,106 +1014,387 @@ ipcMain.handle('write-file', async (e, { path: filePath, content }) => {
     }
 });
 
-ipcMain.handle('copy-file', async (e, { src, targets }) => {
-    const fs = require('fs');
-    const path = require('path');
+const ACTION_HISTORY_LIMIT = 50;
+const actionUndoStack = [];
+const actionRedoStack = [];
+
+function cleanupActionHistory() {
+    [...actionUndoStack, ...actionRedoStack].forEach(cleanupActionRecord);
+    actionUndoStack.length = 0;
+    actionRedoStack.length = 0;
+}
+
+app.on('before-quit', cleanupActionHistory);
+
+function getActionHistoryState() {
+    const undoAction = actionUndoStack[actionUndoStack.length - 1] || null;
+    const redoAction = actionRedoStack[actionRedoStack.length - 1] || null;
+
+    return {
+        canUndo: Boolean(undoAction),
+        canRedo: Boolean(redoAction),
+        undoLabel: undoAction?.label || '',
+        redoLabel: redoAction?.label || ''
+    };
+}
+
+function normalizeActionTargets(value) {
+    return (Array.isArray(value) ? value : [value])
+        .map(target => String(target || '').trim())
+        .filter(Boolean);
+}
+
+function createActionRecord(type, label) {
+    const tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'n-way-action-'));
+
+    return {
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        type,
+        label,
+        backupRoot: tempRoot,
+        items: []
+    };
+}
+
+function cleanupActionRecord(record) {
+    if (!record?.backupRoot || !fs.existsSync(record.backupRoot)) {
+        return;
+    }
 
     try {
-        targets.forEach(target => {
-            // СЃСЉР·РґР°РІР°РјРµ РґРёСЂРµРєС‚РѕСЂРёСЏС‚Р° Р°РєРѕ Р»РёРїСЃРІР°
-            const dir = path.dirname(target);
-            if (!fs.existsSync(dir)) {
-                fs.mkdirSync(dir, { recursive: true });
-            }
+        fs.rmSync(record.backupRoot, { recursive: true, force: true });
+    } catch (err) {
+        console.warn('Could not clean action backup:', err);
+    }
+}
 
-            // РєРѕРїРёСЂР°РјРµ С„Р°Р№Р»Р°
+function clearRedoHistory() {
+    while (actionRedoStack.length) {
+        cleanupActionRecord(actionRedoStack.pop());
+    }
+}
+
+function pushUndoAction(record) {
+    if (!record.items.length) {
+        cleanupActionRecord(record);
+        return;
+    }
+
+    clearRedoHistory();
+    actionUndoStack.push(record);
+
+    while (actionUndoStack.length > ACTION_HISTORY_LIMIT) {
+        cleanupActionRecord(actionUndoStack.shift());
+    }
+}
+
+function ensureParentDir(targetPath) {
+    const dirPath = path.dirname(targetPath);
+    if (!fs.existsSync(dirPath)) {
+        fs.mkdirSync(dirPath, { recursive: true });
+    }
+}
+
+function removePath(targetPath) {
+    if (fs.existsSync(targetPath)) {
+        fs.rmSync(targetPath, { recursive: true, force: true });
+    }
+}
+
+function copyPath(srcPath, destPath) {
+    const stat = fs.statSync(srcPath);
+    ensureParentDir(destPath);
+
+    if (stat.isDirectory()) {
+        fs.cpSync(srcPath, destPath, { recursive: true, force: true });
+        return;
+    }
+
+    fs.copyFileSync(srcPath, destPath);
+}
+
+function copyDirectoryContents(srcDir, destDir) {
+    if (!fs.existsSync(destDir)) {
+        fs.mkdirSync(destDir, { recursive: true });
+    }
+
+    fs.readdirSync(srcDir, { withFileTypes: true }).forEach(entry => {
+        const srcPath = path.join(srcDir, entry.name);
+        const destPath = path.join(destDir, entry.name);
+
+        if (entry.isDirectory()) {
+            copyDirectoryContents(srcPath, destPath);
+        } else {
+            ensureParentDir(destPath);
+            fs.copyFileSync(srcPath, destPath);
+        }
+    });
+}
+
+function capturePathState(record, targetPath, itemIndex, stateName) {
+    if (!fs.existsSync(targetPath)) {
+        return {
+            existed: false,
+            backupPath: ''
+        };
+    }
+
+    const backupPath = path.join(record.backupRoot, String(itemIndex), stateName);
+    copyPath(targetPath, backupPath);
+
+    return {
+        existed: true,
+        backupPath
+    };
+}
+
+function restorePathState(targetPath, state) {
+    removePath(targetPath);
+
+    if (state?.existed) {
+        copyPath(state.backupPath, targetPath);
+    }
+}
+
+function rollbackAction(record) {
+    record.items
+        .slice()
+        .reverse()
+        .forEach(item => restorePathState(item.target, item.before));
+}
+
+function notifyFolderChanged() {
+    BrowserWindow.getAllWindows().forEach(win => {
+        if (!win.isDestroyed()) {
+            win.webContents.send('folder-changed');
+        }
+    });
+}
+
+function applyActionState(record, stateName) {
+    const rollbackStateName = stateName === 'before' ? 'after' : 'before';
+    const appliedItems = [];
+
+    try {
+        record.items.forEach(item => {
+            restorePathState(item.target, item[stateName]);
+            appliedItems.push(item);
+        });
+    } catch (err) {
+        appliedItems
+            .slice()
+            .reverse()
+            .forEach(item => restorePathState(item.target, item[rollbackStateName]));
+        throw err;
+    }
+
+    markPathsDirty(record.items.map(item => item.target));
+    notifyFolderChanged();
+}
+
+function executeCopyFileAction({ src, targets }) {
+    const actionTargets = normalizeActionTargets(targets);
+    const record = createActionRecord('copy-file', `Copy ${actionTargets.length} file${actionTargets.length === 1 ? '' : 's'}`);
+
+    try {
+        actionTargets.forEach((target, index) => {
+            const before = capturePathState(record, target, index, 'before');
+            const item = { target, before, after: { existed: false, backupPath: '' } };
+            record.items.push(item);
+
+            ensureParentDir(target);
             fs.copyFileSync(src, target);
+            item.after = capturePathState(record, target, index, 'after');
         });
 
-        markPathsDirty(targets);
-        return { success: true };
+        pushUndoAction(record);
+        markPathsDirty(actionTargets);
+        return { success: true, history: getActionHistoryState() };
+    } catch (err) {
+        rollbackAction(record);
+        cleanupActionRecord(record);
+        throw err;
+    }
+}
+
+function executeDeleteFileAction(targets) {
+    const actionTargets = normalizeActionTargets(targets);
+    const record = createActionRecord('delete-file', `Delete ${actionTargets.length} file${actionTargets.length === 1 ? '' : 's'}`);
+
+    try {
+        actionTargets.forEach((target, index) => {
+            const before = capturePathState(record, target, index, 'before');
+            const item = {
+                target,
+                before,
+                after: {
+                    existed: false,
+                    backupPath: ''
+                }
+            };
+            record.items.push(item);
+
+            if (before.existed) {
+                removePath(target);
+            }
+        });
+
+        pushUndoAction(record);
+        markPathsDirty(actionTargets);
+        return { success: true, history: getActionHistoryState() };
+    } catch (err) {
+        rollbackAction(record);
+        cleanupActionRecord(record);
+        throw err;
+    }
+}
+
+function executeCopyFolderAction({ src, targets }) {
+    const actionTargets = normalizeActionTargets(targets);
+    const record = createActionRecord('copy-folder', `Copy ${actionTargets.length} folder${actionTargets.length === 1 ? '' : 's'}`);
+
+    try {
+        actionTargets.forEach((target, index) => {
+            const before = capturePathState(record, target, index, 'before');
+            const item = { target, before, after: { existed: false, backupPath: '' } };
+            record.items.push(item);
+
+            copyDirectoryContents(src, target);
+            item.after = capturePathState(record, target, index, 'after');
+        });
+
+        pushUndoAction(record);
+        markPathsDirty(actionTargets);
+        return { success: true, history: getActionHistoryState() };
+    } catch (err) {
+        rollbackAction(record);
+        cleanupActionRecord(record);
+        throw err;
+    }
+}
+
+function executeDeleteFolderAction(targets) {
+    const actionTargets = normalizeActionTargets(targets);
+    const record = createActionRecord('delete-folder', `Delete ${actionTargets.length} folder${actionTargets.length === 1 ? '' : 's'}`);
+
+    try {
+        actionTargets.forEach((target, index) => {
+            const before = capturePathState(record, target, index, 'before');
+            const item = {
+                target,
+                before,
+                after: {
+                    existed: false,
+                    backupPath: ''
+                }
+            };
+            record.items.push(item);
+
+            if (before.existed) {
+                removePath(target);
+            }
+        });
+
+        pushUndoAction(record);
+        markPathsDirty(actionTargets);
+        return { success: true, history: getActionHistoryState() };
+    } catch (err) {
+        rollbackAction(record);
+        cleanupActionRecord(record);
+        throw err;
+    }
+}
+
+ipcMain.handle('copy-file', async (e, data) => {
+    try {
+        return executeCopyFileAction(data);
     } catch (err) {
         console.error('Copy error:', err);
         throw err;
     }
 });
 
-ipcMain.handle('delete-file', async (e, filePath) => {
-    const fs = require('fs');
-
+ipcMain.handle('delete-file', async (e, targets) => {
     try {
-        if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
-        }
-
-        markPathDirty(filePath);
-        return { success: true };
+        return executeDeleteFileAction(targets);
     } catch (err) {
         console.error('Delete error:', err);
         throw err;
     }
 });
 
-ipcMain.handle('copy-folder', async (e, { src, targets }) => {
-    const fs = require('fs');
-    const path = require('path');
-
-    function copyRecursive(srcDir, destDir) {
-        if (!fs.existsSync(destDir)) {
-            fs.mkdirSync(destDir, { recursive: true });
-        }
-
-        fs.readdirSync(srcDir, { withFileTypes: true }).forEach(entry => {
-            const srcPath = path.join(srcDir, entry.name);
-            const destPath = path.join(destDir, entry.name);
-
-            if (entry.isDirectory()) {
-                copyRecursive(srcPath, destPath);
-            } else {
-                fs.copyFileSync(srcPath, destPath);
-            }
-        });
-    }
-
+ipcMain.handle('copy-folder', async (e, data) => {
     try {
-        targets.forEach(target => {
-            copyRecursive(src, target);
-        });
-
-        markPathsDirty(targets);
-        return { success: true };
+        return executeCopyFolderAction(data);
     } catch (err) {
         console.error('Folder copy error:', err);
         throw err;
     }
 });
 
-ipcMain.handle('delete-folder', async (e, folderPath) => {
-    const fs = require('fs');
-    const path = require('path');
+ipcMain.handle('delete-folder', async (e, targets) => {
+    try {
+        return executeDeleteFolderAction(targets);
+    } catch (err) {
+        console.error('Folder delete error:', err);
+        throw err;
+    }
+});
 
-    function deleteRecursive(dir) {
-        if (!fs.existsSync(dir)) return;
+ipcMain.handle('get-main-action-history-state', async () => {
+    return getActionHistoryState();
+});
 
-        fs.readdirSync(dir, { withFileTypes: true }).forEach(entry => {
-            const fullPath = path.join(dir, entry.name);
+ipcMain.handle('undo-main-action', async () => {
+    const record = actionUndoStack.pop();
 
-            if (entry.isDirectory()) {
-                deleteRecursive(fullPath);
-            } else {
-                fs.unlinkSync(fullPath);
-            }
-        });
-
-        fs.rmdirSync(dir);
+    if (!record) {
+        return {
+            success: false,
+            message: 'Nothing to undo',
+            history: getActionHistoryState()
+        };
     }
 
     try {
-        deleteRecursive(folderPath);
-        markPathDirty(folderPath);
-        return { success: true };
+        applyActionState(record, 'before');
+        actionRedoStack.push(record);
+
+        return {
+            success: true,
+            action: record.label,
+            history: getActionHistoryState()
+        };
     } catch (err) {
-        console.error('Folder delete error:', err);
+        actionUndoStack.push(record);
+        console.error('Undo error:', err);
+        throw err;
+    }
+});
+
+ipcMain.handle('redo-main-action', async () => {
+    const record = actionRedoStack.pop();
+
+    if (!record) {
+        return {
+            success: false,
+            message: 'Nothing to redo',
+            history: getActionHistoryState()
+        };
+    }
+
+    try {
+        applyActionState(record, 'after');
+        actionUndoStack.push(record);
+
+        return {
+            success: true,
+            action: record.label,
+            history: getActionHistoryState()
+        };
+    } catch (err) {
+        actionRedoStack.push(record);
+        console.error('Redo error:', err);
         throw err;
     }
 });

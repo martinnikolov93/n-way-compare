@@ -184,6 +184,39 @@ body {
   background: #edf3ff;
 }
 
+.app-toast {
+  position: fixed;
+  top: 18px;
+  left: 50%;
+  z-index: 16000;
+  min-width: 220px;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 11px 16px;
+  border: 1px solid rgba(119, 157, 135, 0.85);
+  border-radius: 999px;
+  background: #e7f7ee;
+  color: #246f48;
+  font-size: 13px;
+  font-weight: 800;
+  text-align: center;
+  box-shadow: 0 10px 28px rgba(18, 31, 52, 0.14);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -10px);
+  transition: opacity 0.14s ease, transform 0.14s ease;
+}
+
+.app-toast.is-visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.app-toast.is-neutral {
+  border-color: rgba(157, 171, 194, 0.88);
+  background: #eef3f9;
+  color: #405674;
+}
+
 .folder-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
@@ -480,6 +513,10 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.compare-history-btn {
+  min-width: 78px;
 }
 
 .compare-toolbar-meta {

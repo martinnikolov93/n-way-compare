@@ -7,6 +7,9 @@ let preservedScrollState = null;
 let scrollRestoreToken = 0;
 let activeRenderController = null;
 let statsRefreshTimer = null;
+let mainActionHistoryState = { canUndo: false, canRedo: false, undoLabel: '', redoLabel: '' };
+let mainActionHistoryBusy = false;
+let appToastTimer = null;
 
 const collapseState = {};
 let lastWatchedDirs = [];
@@ -39,6 +42,105 @@ function arraysEqual(a, b) {
 
 function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
+}
+
+function syncMainActionHistoryState(nextState = {}) {
+    mainActionHistoryState = {
+        canUndo: Boolean(nextState.canUndo),
+        canRedo: Boolean(nextState.canRedo),
+        undoLabel: nextState.undoLabel || '',
+        redoLabel: nextState.redoLabel || ''
+    };
+
+    activeRenderController?.refreshMainActionButtons?.();
+}
+
+async function refreshMainActionHistoryState() {
+    if (!window.api.getMainActionHistoryState) {
+        return;
+    }
+
+    try {
+        syncMainActionHistoryState(await window.api.getMainActionHistoryState());
+    } catch (err) {
+        console.warn('Could not refresh action history state:', err);
+    }
+}
+
+function showAppToast(message, tone = 'success') {
+    let toast = document.getElementById('appToast');
+
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'appToast';
+        toast.className = 'app-toast';
+        toast.setAttribute('role', 'status');
+        toast.setAttribute('aria-live', 'polite');
+        document.body.appendChild(toast);
+    }
+
+    toast.textContent = message;
+    toast.className = `app-toast is-${tone}`;
+
+    if (appToastTimer) {
+        clearTimeout(appToastTimer);
+    }
+
+    requestAnimationFrame(() => {
+        toast.classList.add('is-visible');
+    });
+
+    appToastTimer = setTimeout(() => {
+        toast.classList.remove('is-visible');
+    }, 2400);
+}
+
+async function handleMainActionSuccess(result, message) {
+    if (result?.history) {
+        syncMainActionHistoryState(result.history);
+    } else {
+        await refreshMainActionHistoryState();
+    }
+
+    showAppToast(message);
+}
+
+async function performMainActionHistoryCommand(commandName, successMessage) {
+    if (mainActionHistoryBusy || !window.api[commandName]) {
+        return;
+    }
+
+    mainActionHistoryBusy = true;
+    activeRenderController?.refreshMainActionButtons?.();
+
+    try {
+        const result = await window.api[commandName]();
+
+        if (result?.history) {
+            syncMainActionHistoryState(result.history);
+        }
+
+        if (!result?.success) {
+            showAppToast(result?.message || 'Nothing to apply', 'neutral');
+            return;
+        }
+
+        showAppToast(successMessage);
+        scan();
+    } catch (err) {
+        alert('Action history error: ' + err.message);
+    } finally {
+        mainActionHistoryBusy = false;
+        activeRenderController?.refreshMainActionButtons?.();
+    }
+}
+
+function undoMainAction() {
+    return performMainActionHistoryCommand('undoMainAction', 'Undo successful');
+}
+
+function redoMainAction() {
+    return performMainActionHistoryCommand('redoMainAction', 'Redo successful');
 }
 
 function getDirs() {
@@ -1281,9 +1383,35 @@ function render() {
         render();
     });
 
+    const undoBtn = document.createElement('button');
+    undoBtn.type = 'button';
+    undoBtn.className = 'app-btn app-btn-secondary compare-history-btn';
+    undoBtn.textContent = 'Undo';
+    undoBtn.addEventListener('click', () => undoMainAction());
+
+    const redoBtn = document.createElement('button');
+    redoBtn.type = 'button';
+    redoBtn.className = 'app-btn app-btn-secondary compare-history-btn';
+    redoBtn.textContent = 'Redo';
+    redoBtn.addEventListener('click', () => redoMainAction());
+
+    const refreshMainActionButtons = () => {
+        undoBtn.disabled = mainActionHistoryBusy || !mainActionHistoryState.canUndo;
+        redoBtn.disabled = mainActionHistoryBusy || !mainActionHistoryState.canRedo;
+        undoBtn.title = mainActionHistoryState.canUndo
+            ? `Undo ${mainActionHistoryState.undoLabel}`
+            : 'No actions to undo';
+        redoBtn.title = mainActionHistoryState.canRedo
+            ? `Redo ${mainActionHistoryState.redoLabel}`
+            : 'No actions to redo';
+    };
+
     toolbarGroup.appendChild(expandBtn);
     toolbarGroup.appendChild(expandDiffBtn);
     toolbarGroup.appendChild(collapseBtn);
+    toolbarGroup.appendChild(undoBtn);
+    toolbarGroup.appendChild(redoBtn);
+    refreshMainActionButtons();
 
     const meta = document.createElement('div');
     meta.className = 'compare-toolbar-meta';
@@ -1629,8 +1757,8 @@ function render() {
                 }
 
                 window.api.copyFile({ src: selectedSource, targets })
-                    .then(() => {
-                        alert('Copied!');
+                    .then(result => {
+                        handleMainActionSuccess(result, 'Copied!');
                     })
                     .catch(err => alert('Error: ' + err.message));
             }
@@ -1654,9 +1782,9 @@ function render() {
                     return;
                 }
 
-                Promise.all(targets.map(target => window.api.deleteFile(target)))
-                    .then(() => {
-                        alert('Deleted!');
+                window.api.deleteFile(targets)
+                    .then(result => {
+                        handleMainActionSuccess(result, 'Deleted!');
                     })
                     .catch(err => alert('Error: ' + err.message));
             }
@@ -1818,11 +1946,11 @@ function render() {
                                 return alert('No targets selected');
                             }
 
-                        window.api.copyFolder({ src: selectedSourceFolder, targets })
-                            .then(() => {
-                                alert('Folder copied!');
-                            })
-                            .catch(err => alert(err.message));
+                            window.api.copyFolder({ src: selectedSourceFolder, targets })
+                                .then(result => {
+                                    handleMainActionSuccess(result, 'Folder copied!');
+                                })
+                                .catch(err => alert(err.message));
                         }
                     });
 
@@ -1844,9 +1972,9 @@ function render() {
                                 return;
                             }
 
-                            Promise.all(targets.map(target => window.api.deleteFolder(target)))
-                                .then(() => {
-                                    alert('Deleted!');
+                            window.api.deleteFolder(targets)
+                                .then(result => {
+                                    handleMainActionSuccess(result, 'Deleted!');
                                 })
                                 .catch(err => alert(err.message));
                         }
@@ -1952,6 +2080,7 @@ function render() {
         refreshMeta() {
             meta.textContent = `${dirs.length} folders | ${currentStats.folders} folders in tree | ${currentStats.files} files | ${currentStats.diffs} diff items`;
         },
+        refreshMainActionButtons,
         rerenderFileRow(filePath) {
             const normalizedPath = normalizeDataPath(filePath);
             const state = fileRowStates.get(normalizedPath);
@@ -2263,4 +2392,36 @@ document.getElementById('saveConfigBtn').addEventListener('click', () => saveCon
 document.getElementById('scanBtn').addEventListener('click', () => scan());
 document.getElementById('runCmdBtn').addEventListener('click', () => runCmd());
 
+document.addEventListener('keydown', event => {
+    const target = event.target;
+    const isTypingTarget = target?.isContentEditable ||
+        ['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName);
+
+    if (
+        event.defaultPrevented ||
+        window.differenceViewer?.isOpen?.() ||
+        isTypingTarget ||
+        !(event.ctrlKey || event.metaKey)
+    ) {
+        return;
+    }
+
+    const key = event.key.toLowerCase();
+    const shouldUndo = key === 'z' && !event.shiftKey;
+    const shouldRedo = key === 'y' || (key === 'z' && event.shiftKey);
+
+    if (!shouldUndo && !shouldRedo) {
+        return;
+    }
+
+    event.preventDefault();
+
+    if (shouldUndo) {
+        undoMainAction();
+    } else {
+        redoMainAction();
+    }
+});
+
 setFolderInputs(Array.from(document.querySelectorAll('#folders .folder-input')).map(input => input.value));
+refreshMainActionHistoryState();
