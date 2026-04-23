@@ -89,6 +89,8 @@
             this.pendingSelectionMoveFrame = 0;
             this.lastSelectionMoveAt = 0;
             this.dragSelection = null;
+            this.transientSelectionFlash = null;
+            this.transientSelectionFlashTimer = 0;
             this.inlineEditor = null;
             this.pendingRowReveal = null;
             this.pendingViewerOpenScrollReset = null;
@@ -370,6 +372,9 @@
         refreshSelectionVisuals() {
             const tab = this.getActiveTab();
             const selection = tab?.selection || null;
+            const flash = tab && this.transientSelectionFlash?.tabId === tab.id
+                ? this.transientSelectionFlash
+                : null;
 
             this.headerElements.forEach((headerEl, paneIndex) => {
                 if (!headerEl || !tab) {
@@ -395,9 +400,16 @@
                         rowIndex >= selection.startRow &&
                         rowIndex <= selection.endRow
                     );
+                    const isDeleteFlash = Boolean(
+                        flash &&
+                        flash.paneIndex === paneIndex &&
+                        rowIndex >= flash.startRow &&
+                        rowIndex <= flash.endRow
+                    );
 
                     cellEl.classList.toggle('is-selected', isSelected);
                     cellEl.classList.toggle('is-active-pane', paneIndex === tab.focusPaneIndex);
+                    cellEl.classList.toggle('is-delete-flash', isDeleteFlash);
                 });
             });
 
@@ -409,134 +421,15 @@
         }
 
         getDifferenceRanges(sourceText, compareText) {
-            if (typeof sourceText !== 'string' || typeof compareText !== 'string' || sourceText === compareText) {
-                return [];
-            }
-
-            if (!sourceText.length) {
-                return [];
-            }
-
-            let prefix = 0;
-            const maxPrefix = Math.min(sourceText.length, compareText.length);
-            while (prefix < maxPrefix && sourceText[prefix] === compareText[prefix]) {
-                prefix += 1;
-            }
-
-            let suffix = 0;
-            const maxSuffix = Math.min(sourceText.length - prefix, compareText.length - prefix);
-            while (
-                suffix < maxSuffix &&
-                sourceText[sourceText.length - 1 - suffix] === compareText[compareText.length - 1 - suffix]
-            ) {
-                suffix += 1;
-            }
-
-            const start = prefix;
-            const end = sourceText.length - suffix;
-            if (end <= start) {
-                return [];
-            }
-
-            const tokenRanges = this.getTokenDifferenceRanges(
-                sourceText.slice(start, end),
-                compareText.slice(prefix, compareText.length - suffix),
-                start
-            );
-
-            if (tokenRanges.length) {
-                return tokenRanges;
-            }
-
-            return [{ start, end }];
+            return window.DifferenceInlineDiff.getDifferenceRanges(sourceText, compareText);
         }
 
         tokenizeInlineDifference(text) {
-            const tokens = [];
-            const pattern = /\s+|[A-Za-z_$][A-Za-z0-9_$]*|\d+(?:\.\d+)?|./g;
-            let match = pattern.exec(text);
-
-            while (match) {
-                tokens.push({
-                    value: match[0],
-                    start: match.index,
-                    end: match.index + match[0].length
-                });
-                match = pattern.exec(text);
-            }
-
-            return tokens;
+            return window.DifferenceInlineDiff.tokenizeInlineDifference(text);
         }
 
         getTokenDifferenceRanges(sourceText, compareText, sourceOffset) {
-            if (!sourceText.length || !compareText.length) {
-                return [];
-            }
-
-            const sourceTokens = this.tokenizeInlineDifference(sourceText);
-            const compareTokens = this.tokenizeInlineDifference(compareText);
-            const product = sourceTokens.length * compareTokens.length;
-
-            if (
-                !sourceTokens.length ||
-                !compareTokens.length ||
-                sourceTokens.length > 1000 ||
-                compareTokens.length > 1000 ||
-                product > 120000
-            ) {
-                return [];
-            }
-
-            const matrix = Array.from(
-                { length: sourceTokens.length + 1 },
-                () => new Uint16Array(compareTokens.length + 1)
-            );
-
-            for (let sourceIndex = sourceTokens.length - 1; sourceIndex >= 0; sourceIndex -= 1) {
-                const row = matrix[sourceIndex];
-                const nextRow = matrix[sourceIndex + 1];
-
-                for (let compareIndex = compareTokens.length - 1; compareIndex >= 0; compareIndex -= 1) {
-                    row[compareIndex] = sourceTokens[sourceIndex].value === compareTokens[compareIndex].value
-                        ? nextRow[compareIndex + 1] + 1
-                        : Math.max(nextRow[compareIndex], row[compareIndex + 1]);
-                }
-            }
-
-            const ranges = [];
-            let sourceIndex = 0;
-            let compareIndex = 0;
-
-            while (sourceIndex < sourceTokens.length && compareIndex < compareTokens.length) {
-                if (sourceTokens[sourceIndex].value === compareTokens[compareIndex].value) {
-                    sourceIndex += 1;
-                    compareIndex += 1;
-                    continue;
-                }
-
-                if (matrix[sourceIndex + 1][compareIndex] >= matrix[sourceIndex][compareIndex + 1]) {
-                    const token = sourceTokens[sourceIndex];
-                    ranges.push({
-                        start: sourceOffset + token.start,
-                        end: sourceOffset + token.end
-                    });
-                    sourceIndex += 1;
-                    continue;
-                }
-
-                compareIndex += 1;
-            }
-
-            while (sourceIndex < sourceTokens.length) {
-                const token = sourceTokens[sourceIndex];
-                ranges.push({
-                    start: sourceOffset + token.start,
-                    end: sourceOffset + token.end
-                });
-                sourceIndex += 1;
-            }
-
-            return mergeRanges(ranges);
+            return window.DifferenceInlineDiff.getTokenDifferenceRanges(sourceText, compareText, sourceOffset);
         }
 
         getChangedRangesForCell(row, paneIndex) {
@@ -1141,11 +1034,9 @@
             const descriptorKey = this.getDescriptorKey(normalized);
             const wasOpen = this.isOpen();
             let tab = this.tabs.find(existing => this.getDescriptorKey(existing.descriptor) === descriptorKey);
+            const reusedExistingTab = Boolean(tab);
 
-            if (tab) {
-                const refreshed = await this.loadTab(normalized, tab.id);
-                Object.assign(tab, refreshed);
-            } else {
+            if (!tab) {
                 tab = await this.loadTab(normalized);
                 this.tabs.push(tab);
             }
@@ -1161,7 +1052,10 @@
             this.activeTabId = tab.id;
             this.persistTabs();
             this.show();
-            this.setStatus('Opened difference tab for ' + normalized.relativePath + '.', true);
+            this.setStatus(
+                (reusedExistingTab ? 'Reopened existing difference tab for ' : 'Opened difference tab for ') + normalized.relativePath + '.',
+                true
+            );
             this.render();
         }
 
@@ -2289,217 +2183,38 @@
         }
 
         getPreviousMeaningfulLine(lines, startIndex) {
-            for (let lineIndex = startIndex - 1; lineIndex >= 0; lineIndex -= 1) {
-                const text = lines[lineIndex];
-                if (typeof text !== 'string') {
-                    continue;
-                }
-
-                const trimmed = text.trim();
-                if (trimmed && !/^[{}()[\],;]+$/.test(trimmed)) {
-                    return text;
-                }
-            }
-
-            return '';
+            return window.DifferenceTransfer.getPreviousMeaningfulLine(lines, startIndex);
         }
 
         getNextMeaningfulLine(lines, startIndex) {
-            for (let lineIndex = startIndex + 1; lineIndex < lines.length; lineIndex += 1) {
-                const text = lines[lineIndex];
-                if (typeof text !== 'string') {
-                    continue;
-                }
-
-                const trimmed = text.trim();
-                if (trimmed && !/^[{}()[\],;]+$/.test(trimmed)) {
-                    return text;
-                }
-            }
-
-            return '';
+            return window.DifferenceTransfer.getNextMeaningfulLine(lines, startIndex);
         }
 
         getRunInfo(lines, lineIndex) {
-            const text = lines[lineIndex];
-            let start = lineIndex;
-            let end = lineIndex;
-
-            while (start > 0 && lines[start - 1] === text) {
-                start -= 1;
-            }
-
-            while (end + 1 < lines.length && lines[end + 1] === text) {
-                end += 1;
-            }
-
-            return {
-                offset: lineIndex - start,
-                length: end - start + 1
-            };
+            return window.DifferenceTransfer.getRunInfo(lines, lineIndex);
         }
 
         buildTransferItem(tab, sourcePaneIndex, lineIndex) {
-            const sourceLines = tab.panes[sourcePaneIndex].lines;
-            const text = sourceLines[lineIndex] || '';
-            const runInfo = this.getRunInfo(sourceLines, lineIndex);
-
-            return {
-                text,
-                hint: {
-                    previousMeaningful: this.getPreviousMeaningfulLine(sourceLines, lineIndex),
-                    nextMeaningful: this.getNextMeaningfulLine(sourceLines, lineIndex),
-                    runOffset: runInfo.offset,
-                    runLength: runInfo.length
-                }
-            };
+            return window.DifferenceTransfer.buildTransferItem(tab, sourcePaneIndex, lineIndex);
         }
 
         buildTransferItemsFromLineRange(tab, sourcePaneIndex, startLineIndex, endLineIndexExclusive) {
-            const items = [];
-
-            for (let lineIndex = startLineIndex; lineIndex < endLineIndexExclusive; lineIndex += 1) {
-                items.push(this.buildTransferItem(tab, sourcePaneIndex, lineIndex));
-            }
-
-            return items;
+            return window.DifferenceTransfer.buildTransferItemsFromLineRange(
+                tab,
+                sourcePaneIndex,
+                startLineIndex,
+                endLineIndexExclusive
+            );
         }
 
         getTransferLinesFromPane(tab, sourcePaneIndex, targetPaneIndex, startRow, endRow) {
-            const sourceCells = [];
-            let targetHasContent = false;
-
-            for (let rowIndex = startRow; rowIndex <= endRow; rowIndex += 1) {
-                const sourceCell = tab.rows[rowIndex]?.cells?.[sourcePaneIndex];
-                const targetCell = tab.rows[rowIndex]?.cells?.[targetPaneIndex];
-
-                if (sourceCell && !sourceCell.missing && sourceCell.lineNumber != null) {
-                    sourceCells.push(sourceCell);
-                }
-
-                if (targetCell && !targetCell.missing && targetCell.lineNumber != null) {
-                    targetHasContent = true;
-                }
-            }
-
-            if (!sourceCells.length) {
-                return [];
-            }
-
-            if (targetHasContent) {
-                return sourceCells.map(cell => this.buildTransferItem(tab, sourcePaneIndex, cell.lineNumber - 1));
-            }
-
-            let blockStart = startRow;
-            while (blockStart > 0) {
-                const targetCell = tab.rows[blockStart - 1]?.cells?.[targetPaneIndex];
-                if (!targetCell || !targetCell.missing) {
-                    break;
-                }
-
-                blockStart -= 1;
-            }
-
-            let blockEnd = endRow;
-            while (blockEnd + 1 < tab.rows.length) {
-                const targetCell = tab.rows[blockEnd + 1]?.cells?.[targetPaneIndex];
-                if (!targetCell || !targetCell.missing) {
-                    break;
-                }
-
-                blockEnd += 1;
-            }
-
-            const blockSourceCells = [];
-            for (let rowIndex = blockStart; rowIndex <= blockEnd; rowIndex += 1) {
-                const sourceCell = tab.rows[rowIndex]?.cells?.[sourcePaneIndex];
-                if (sourceCell && !sourceCell.missing && sourceCell.lineNumber != null) {
-                    blockSourceCells.push({
-                        rowIndex,
-                        lineNumber: sourceCell.lineNumber
-                    });
-                }
-            }
-
-            const inferredBlockStartLineIndex = blockSourceCells.length
-                ? blockSourceCells[0].lineNumber - 1 - (blockSourceCells[0].rowIndex - blockStart)
-                : -1;
-            const blockHasStableSourceOffsets = (
-                inferredBlockStartLineIndex >= 0 &&
-                blockSourceCells.every((cell) => {
-                    return (cell.lineNumber - 1) === inferredBlockStartLineIndex + (cell.rowIndex - blockStart);
-                })
+            return window.DifferenceTransfer.getTransferLinesFromPane(
+                tab,
+                sourcePaneIndex,
+                targetPaneIndex,
+                startRow,
+                endRow
             );
-
-            if (blockHasStableSourceOffsets) {
-                const startOffset = startRow - blockStart;
-                const endOffset = endRow - blockStart;
-                const startLineIndex = Math.max(0, inferredBlockStartLineIndex + startOffset);
-                const endLineIndex = Math.min(
-                    tab.panes[sourcePaneIndex].lines.length,
-                    inferredBlockStartLineIndex + endOffset + 1
-                );
-
-                if (endLineIndex > startLineIndex) {
-                    return this.buildTransferItemsFromLineRange(tab, sourcePaneIndex, startLineIndex, endLineIndex);
-                }
-            }
-
-            let firstLineIndex = sourceCells[0].lineNumber - 1;
-            let lastLineIndex = sourceCells[sourceCells.length - 1].lineNumber - 1;
-            const desiredLineCount = endRow - startRow + 1;
-            let searchBefore = startRow - 1;
-            let searchAfter = endRow + 1;
-
-            while ((lastLineIndex - firstLineIndex + 1) < desiredLineCount) {
-                let extended = false;
-
-                for (let rowIndex = searchAfter; rowIndex < tab.rows.length; rowIndex += 1) {
-                    const sourceCell = tab.rows[rowIndex]?.cells?.[sourcePaneIndex];
-                    const targetCell = tab.rows[rowIndex]?.cells?.[targetPaneIndex];
-
-                    if (sourceCell && !sourceCell.missing && sourceCell.lineNumber != null) {
-                        if ((!targetCell || targetCell.lineNumber == null) && sourceCell.lineNumber - 1 === lastLineIndex + 1) {
-                            lastLineIndex += 1;
-                            searchAfter = rowIndex + 1;
-                            extended = true;
-                        }
-                        break;
-                    }
-
-                    if (targetCell && targetCell.lineNumber != null) {
-                        break;
-                    }
-                }
-
-                if ((lastLineIndex - firstLineIndex + 1) >= desiredLineCount) {
-                    break;
-                }
-
-                for (let rowIndex = searchBefore; rowIndex >= 0; rowIndex -= 1) {
-                    const sourceCell = tab.rows[rowIndex]?.cells?.[sourcePaneIndex];
-                    const targetCell = tab.rows[rowIndex]?.cells?.[targetPaneIndex];
-
-                    if (sourceCell && !sourceCell.missing && sourceCell.lineNumber != null) {
-                        if ((!targetCell || targetCell.lineNumber == null) && sourceCell.lineNumber - 1 === firstLineIndex - 1) {
-                            firstLineIndex -= 1;
-                            searchBefore = rowIndex - 1;
-                            extended = true;
-                        }
-                        break;
-                    }
-
-                    if (targetCell && targetCell.lineNumber != null) {
-                        break;
-                    }
-                }
-
-                if (!extended) {
-                    break;
-                }
-            }
-
-            return this.buildTransferItemsFromLineRange(tab, sourcePaneIndex, firstLineIndex, lastLineIndex + 1);
         }
 
         canCopySelectionToNeighbor(direction) {
@@ -2530,7 +2245,45 @@
             return window.DifferenceEngine.selectionHasContent(selection.tab.rows, sourcePaneIndex, selection.startRow, selection.endRow);
         }
 
-        applyReplacement(tab, paneIndex, startRow, endRow, replacementLines, description) {
+        canDeleteSelection() {
+            const selection = this.getSelection();
+            if (!selection) {
+                return false;
+            }
+
+            return window.DifferenceEngine.selectionHasContent(
+                selection.tab.rows,
+                selection.paneIndex,
+                selection.startRow,
+                selection.endRow
+            );
+        }
+
+        setTransientSelectionFlash(tabId, paneIndex, startRow, endRow, durationMs = 220) {
+            if (this.transientSelectionFlashTimer) {
+                clearTimeout(this.transientSelectionFlashTimer);
+                this.transientSelectionFlashTimer = 0;
+            }
+
+            this.transientSelectionFlash = null;
+            this.refreshSelectionVisuals();
+
+            this.transientSelectionFlash = {
+                tabId,
+                paneIndex,
+                startRow,
+                endRow
+            };
+            this.refreshSelectionVisuals();
+
+            this.transientSelectionFlashTimer = setTimeout(() => {
+                this.transientSelectionFlash = null;
+                this.transientSelectionFlashTimer = 0;
+                this.refreshSelectionVisuals();
+            }, durationMs);
+        }
+
+        applyReplacement(tab, paneIndex, startRow, endRow, replacementLines, description, options = {}) {
             const wasDirty = tab.panes.some(pane => pane.dirty);
             this.pushUndoSnapshot(tab);
             const currentPane = tab.panes[paneIndex];
@@ -2547,6 +2300,7 @@
                 const maxRow = Math.max(tab.rows.length - 1, 0);
                 const nextStart = clamp(startRow, 0, maxRow);
                 const nextEnd = clamp(startRow + Math.max(replacementLines.length - 1, 0), nextStart, maxRow);
+
                 tab.selection = {
                     paneIndex,
                     startRow: nextStart,
@@ -2568,6 +2322,10 @@
             }
             this.renderActiveTab();
             this.updateToolbarState();
+
+            if (options.flashSelection && tab.selection) {
+                this.setTransientSelectionFlash(tab.id, paneIndex, tab.selection.startRow, tab.selection.endRow);
+            }
         }
 
         copySelectionToNeighbor(direction) {
@@ -2623,6 +2381,28 @@
                 selection.endRow,
                 lines,
                 'Replaced the current selection in ' + selection.tab.panes[selection.paneIndex].label + ' with text from ' + selection.tab.panes[sourcePaneIndex].label + '.'
+            );
+        }
+
+        deleteSelection() {
+            const selection = this.getSelection();
+            if (!selection) {
+                return;
+            }
+
+            if (!this.canDeleteSelection()) {
+                this.setStatus('Nothing to delete in the current selection.');
+                return;
+            }
+
+            this.applyReplacement(
+                selection.tab,
+                selection.paneIndex,
+                selection.startRow,
+                selection.endRow,
+                [],
+                'Deleted the current selection from ' + selection.tab.panes[selection.paneIndex].label + '.',
+                { flashSelection: true }
             );
         }
 
@@ -2967,6 +2747,12 @@
                 if (event.key === 'ArrowDown') {
                     event.preventDefault();
                     this.queueSelectionMove(1, false, event.repeat);
+                    return;
+                }
+
+                if (event.key === 'Delete') {
+                    event.preventDefault();
+                    this.deleteSelection();
                     return;
                 }
             }

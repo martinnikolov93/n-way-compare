@@ -119,6 +119,24 @@ The Difference Viewer is the built-in multi-pane file diff and merge tool. It op
 
 Click a row to select it. Drag within a pane to select multiple rows. Shift-click extends the current selection inside the same pane.
 
+## Regression Tests
+
+Run `npm test` to execute the diff regression suite.
+
+The current test set focuses on the file-comparison logic that has been most sensitive during development:
+
+| Covered scenario | Why it matters |
+| --- | --- |
+| Multi-pane inserted block between blank rows | Protects the classic “extra lines in one target only” alignment case using synthetic prose. |
+| First blank-line delete | Guards the selection and `Missing in this file` behavior after delete. |
+| Repeated blank-line delete | Protects stability when deleting from the same blank block more than once. |
+| Delete + move blank rows | Catches regressions where editing one block breaks an unrelated block above it. |
+| Blank lines around changed text | Prevents simple line changes from turning into extra missing rows. |
+| Numbered prose rows in two and four panes | Keeps `1:`, `2:` style text aligned by key as counts grow. |
+| Copy into existing target rows | Verifies replacement stays one-to-one instead of creating extra gaps. |
+| Copy blank runs into missing blocks | Protects blank-line transfers and merge actions. |
+| Inline prose and numeric highlights | Verifies only the changed words or digits are highlighted, not surrounding punctuation. |
+
 Double-click a row to edit it inline. Press `Ctrl+Enter` to commit the edit, `Esc` to cancel it, or click away to commit. Pressing `Tab` inside the editor inserts four spaces.
 
 Use `Save All` or `Ctrl+S` to write dirty files to disk. Individual panes also show a `Save` button when that file has unsaved changes.
@@ -148,6 +166,7 @@ Use `Save All` or `Ctrl+S` to write dirty files to disk. Individual panes also s
 | `Ctrl+Z` | Undo in the active comparison tab. |
 | `Ctrl+Y` | Redo in the active comparison tab. |
 | `Ctrl+Shift+Z` | Redo in the active comparison tab. |
+| `Delete` | Deletes the selected row or row range from the active pane. |
 | `Alt+Up` | Jump to the previous diff hunk. |
 | `Alt+Down` | Jump to the next diff hunk. |
 | `ArrowUp` | Move the active row selection up. |

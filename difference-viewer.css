@@ -510,6 +510,12 @@
   background: var(--diff-row-red-selected-strong);
 }
 
+.difference-cell.is-delete-flash {
+  box-shadow:
+    inset 0 0 0 999px rgba(255, 219, 210, 0.72),
+    inset 0 0 0 1px rgba(182, 86, 65, 0.62);
+}
+
 .difference-cell.is-missing {
   background:
     repeating-linear-gradient(

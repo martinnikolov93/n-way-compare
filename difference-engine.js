@@ -589,6 +589,258 @@
         };
     }
 
+    function cloneLineHint(hint) {
+        if (!hint || typeof hint !== 'object') {
+            return null;
+        }
+
+        return { ...hint };
+    }
+
+    function buildLineHint(lines, lineIndex, existingHint = null) {
+        const hint = cloneLineHint(existingHint) || {};
+        const runInfo = getRunInfo(lines, lineIndex);
+
+        if (typeof hint.previousMeaningful !== 'string') {
+            hint.previousMeaningful = getNeighborMeaningfulLine(lines, lineIndex, -1);
+        }
+
+        if (typeof hint.nextMeaningful !== 'string') {
+            hint.nextMeaningful = getNeighborMeaningfulLine(lines, lineIndex, 1);
+        }
+
+        if (!Number.isInteger(hint.runOffset)) {
+            hint.runOffset = runInfo.offset;
+        }
+
+        if (!Number.isInteger(hint.runLength)) {
+            hint.runLength = runInfo.length;
+        }
+
+        hint.preserveIdentity = Boolean(hint.preserveIdentity);
+
+        return hint;
+    }
+
+    function ensureLineHints(lines, lineHints) {
+        return lines.map((_, lineIndex) => {
+            const existingHint = Array.isArray(lineHints) ? lineHints[lineIndex] : null;
+            return buildLineHint(lines, lineIndex, existingHint);
+        });
+    }
+
+    function collectPreservedLineIndices(lines, lineHints, startLine, endLine) {
+        const preserved = new Set();
+        const safeStart = Math.max(0, Math.min(startLine, lines.length));
+        const safeEnd = Math.max(safeStart, Math.min(endLine, lines.length));
+
+        lineHints.forEach((hint, lineIndex) => {
+            if (hint?.preserveIdentity) {
+                preserved.add(lineIndex);
+            }
+        });
+
+        for (let lineIndex = safeStart; lineIndex < safeEnd; lineIndex += 1) {
+            const runInfo = getRunInfo(lines, lineIndex);
+            const runStart = lineIndex - runInfo.offset;
+            const runEnd = runStart + runInfo.length;
+
+            for (let index = runStart; index < runEnd; index += 1) {
+                preserved.add(index);
+            }
+        }
+
+        return preserved;
+    }
+
+    function getSharedPrefixLength(leftText, rightText) {
+        const limit = Math.min(leftText.length, rightText.length);
+        let length = 0;
+
+        while (length < limit && leftText[length] === rightText[length]) {
+            length += 1;
+        }
+
+        return length;
+    }
+
+    function getSharedSuffixLength(leftText, rightText, prefixLength = 0) {
+        const maxSuffix = Math.min(leftText.length, rightText.length) - prefixLength;
+        let length = 0;
+
+        while (
+            length < maxSuffix &&
+            leftText[leftText.length - 1 - length] === rightText[rightText.length - 1 - length]
+        ) {
+            length += 1;
+        }
+
+        return length;
+    }
+
+    function getLeadingKeyToken(text) {
+        if (typeof text !== 'string') {
+            return '';
+        }
+
+        const match = text.match(/^\s*([A-Za-z_$][\w$]*|\d+)\s*:/);
+        return match ? match[1] : '';
+    }
+
+    function getPairContextScore(leftHint, rightHint) {
+        const preserveIdentity = Boolean(leftHint?.preserveIdentity || rightHint?.preserveIdentity);
+        const leftPrevious = normalizeComparableLine(leftHint?.previousMeaningful || '');
+        const rightPrevious = normalizeComparableLine(rightHint?.previousMeaningful || '');
+        const leftNext = normalizeComparableLine(leftHint?.nextMeaningful || '');
+        const rightNext = normalizeComparableLine(rightHint?.nextMeaningful || '');
+        const leftOffset = leftHint?.runOffset;
+        const rightOffset = rightHint?.runOffset;
+        const leftLength = leftHint?.runLength;
+        const rightLength = rightHint?.runLength;
+        const hasRunInfo = Number.isInteger(leftOffset) && Number.isInteger(rightOffset)
+            && Number.isInteger(leftLength) && Number.isInteger(rightLength);
+
+        if (!preserveIdentity) {
+            return 1;
+        }
+
+        if (hasRunInfo) {
+            if (leftOffset !== rightOffset) {
+                // When duplicate runs drift after an insertion/deletion, matching by
+                // surrounding context alone causes the "missing row slides down"
+                // bug. If preserved run identity differs, do not pair them.
+                return 0;
+            }
+
+            if (leftPrevious === rightPrevious && leftNext === rightNext) {
+                return leftLength === rightLength ? 1 : 0.9;
+            }
+
+            return leftLength === rightLength ? 0.72 : 0.62;
+        }
+
+        if (leftPrevious === rightPrevious && leftNext === rightNext) {
+            return 0.85;
+        }
+
+        return 0;
+    }
+
+    function getLinePairScore(leftEntry, rightEntry) {
+        const leftText = typeof leftEntry?.text === 'string' ? leftEntry.text : '';
+        const rightText = typeof rightEntry?.text === 'string' ? rightEntry.text : '';
+        const leftNormalized = normalizeComparableLine(leftText);
+        const rightNormalized = normalizeComparableLine(rightText);
+
+        if (leftNormalized === rightNormalized) {
+            if (leftNormalized === '') {
+                return getPairContextScore(leftEntry?.hint, rightEntry?.hint);
+            }
+
+            if (isStructuralLine(leftText) || isStructuralLine(rightText)) {
+                return Math.max(0.35, getPairContextScore(leftEntry?.hint, rightEntry?.hint));
+            }
+
+            return 1;
+        }
+
+        if (isStructuralLine(leftText) || isStructuralLine(rightText)) {
+            return 0;
+        }
+
+        const sharedPrefix = getSharedPrefixLength(leftText, rightText);
+        const sharedSuffix = getSharedSuffixLength(leftText, rightText, sharedPrefix);
+        const denominator = Math.max(leftText.length, rightText.length, 1);
+        const similarity = (sharedPrefix + sharedSuffix) / denominator;
+        const leftKey = getLeadingKeyToken(leftText);
+        const rightKey = getLeadingKeyToken(rightText);
+
+        if (leftKey && rightKey) {
+            if (leftKey === rightKey) {
+                return Math.max(similarity, 0.6);
+            }
+
+            return Math.max(similarity * 0.35, 0.04);
+        }
+
+        if (similarity >= 0.42) {
+            return similarity;
+        }
+
+        // Keep ordinary text lines paired inside changed blocks even when they
+        // share little literal text, otherwise whole blocks degrade into
+        // delete+insert noise instead of a clean line-to-line diff.
+        return 0.08;
+    }
+
+    function buildWeightedPairOps(leftEntries, rightEntries) {
+        const leftLength = leftEntries.length;
+        const rightLength = rightEntries.length;
+        const scores = Array.from({ length: leftLength + 1 }, () => new Float64Array(rightLength + 1));
+        const steps = Array.from({ length: leftLength + 1 }, () => new Uint8Array(rightLength + 1));
+        const EPSILON = 0.000001;
+
+        for (let leftIndex = leftLength - 1; leftIndex >= 0; leftIndex -= 1) {
+            for (let rightIndex = rightLength - 1; rightIndex >= 0; rightIndex -= 1) {
+                let bestScore = scores[leftIndex + 1][rightIndex];
+                let bestStep = 1; // delete
+
+                if (scores[leftIndex][rightIndex + 1] > bestScore + EPSILON) {
+                    bestScore = scores[leftIndex][rightIndex + 1];
+                    bestStep = 2; // insert
+                }
+
+                const pairScore = getLinePairScore(leftEntries[leftIndex], rightEntries[rightIndex]);
+                if (pairScore > 0) {
+                    const matchScore = scores[leftIndex + 1][rightIndex + 1] + pairScore;
+                    if (matchScore > bestScore + EPSILON || Math.abs(matchScore - bestScore) <= EPSILON) {
+                        bestScore = matchScore;
+                        bestStep = 3; // equal/pair
+                    }
+                }
+
+                scores[leftIndex][rightIndex] = bestScore;
+                steps[leftIndex][rightIndex] = bestStep;
+            }
+        }
+
+        const ops = [];
+        let leftIndex = 0;
+        let rightIndex = 0;
+
+        while (leftIndex < leftLength && rightIndex < rightLength) {
+            const step = steps[leftIndex][rightIndex];
+
+            if (step === 3) {
+                ops.push({ type: 'equal', aIndex: leftIndex, bIndex: rightIndex });
+                leftIndex += 1;
+                rightIndex += 1;
+                continue;
+            }
+
+            if (step === 2) {
+                ops.push({ type: 'insert', bIndex: rightIndex });
+                rightIndex += 1;
+                continue;
+            }
+
+            ops.push({ type: 'delete', aIndex: leftIndex });
+            leftIndex += 1;
+        }
+
+        while (leftIndex < leftLength) {
+            ops.push({ type: 'delete', aIndex: leftIndex });
+            leftIndex += 1;
+        }
+
+        while (rightIndex < rightLength) {
+            ops.push({ type: 'insert', bIndex: rightIndex });
+            rightIndex += 1;
+        }
+
+        return ops;
+    }
+
     function buildAlignmentTokens(lines, ownCountMap, otherCountMap, lineHints, normalizer = (value) => value) {
         return lines.map((line, lineIndex) => {
             const normalizedLine = normalizer(line);
@@ -676,64 +928,38 @@
                 return;
             }
 
-            const deletedLines = deletedIndices.map(index => normalizeComparableLine(anchorLines[index]));
-            const insertedLines = insertedIndices.map(index => normalizeComparableLine(paneLines[index]));
-            const blockOps = buildDiff(deletedLines, insertedLines);
-            let consumedDeleted = 0;
-            let pendingDeleted = [];
-            let pendingInserted = [];
-
-            function flushPendingRun() {
-                if (!pendingDeleted.length && !pendingInserted.length) {
-                    return;
-                }
-
-                const pairCount = Math.min(pendingDeleted.length, pendingInserted.length);
-
-                for (let index = 0; index < pairCount; index += 1) {
-                    cellsByAnchor[pendingDeleted[index]] = createCell(
-                        paneLines[pendingInserted[index]],
-                        pendingInserted[index]
-                    );
-                }
-
-                for (let index = pairCount; index < pendingDeleted.length; index += 1) {
-                    cellsByAnchor[pendingDeleted[index]] = null;
-                }
-
-                if (pairCount < pendingInserted.length) {
-                    const insertionPosition = blockStart + consumedDeleted + pendingDeleted.length;
-                    for (let index = pairCount; index < pendingInserted.length; index += 1) {
-                        beforeInserts[insertionPosition].push(
-                            createCell(paneLines[pendingInserted[index]], pendingInserted[index])
-                        );
-                    }
-                }
-
-                consumedDeleted += pendingDeleted.length;
-                pendingDeleted = [];
-                pendingInserted = [];
-            }
+            const deletedEntries = deletedIndices.map((anchorIndex) => ({
+                text: anchorLines[anchorIndex],
+                hint: anchorPane.lineHints?.[anchorIndex] || null
+            }));
+            const insertedEntries = insertedIndices.map((paneIndex) => ({
+                text: paneLines[paneIndex],
+                hint: pane.lineHints?.[paneIndex] || null
+            }));
+            const blockOps = buildWeightedPairOps(deletedEntries, insertedEntries);
+            let localConsumedDeleted = 0;
 
             blockOps.forEach(op => {
                 if (op.type === 'equal') {
-                    flushPendingRun();
                     const anchorIndex = deletedIndices[op.aIndex];
                     const paneIndex = insertedIndices[op.bIndex];
                     cellsByAnchor[anchorIndex] = createCell(paneLines[paneIndex], paneIndex);
-                    consumedDeleted = op.aIndex + 1;
+                    localConsumedDeleted = op.aIndex + 1;
                     return;
                 }
 
                 if (op.type === 'delete') {
-                    pendingDeleted.push(deletedIndices[op.aIndex]);
+                    const anchorIndex = deletedIndices[op.aIndex];
+                    cellsByAnchor[anchorIndex] = null;
+                    localConsumedDeleted = op.aIndex + 1;
                     return;
                 }
 
-                pendingInserted.push(insertedIndices[op.bIndex]);
+                const insertionPosition = blockStart + localConsumedDeleted;
+                beforeInserts[insertionPosition].push(
+                    createCell(paneLines[insertedIndices[op.bIndex]], insertedIndices[op.bIndex])
+                );
             });
-
-            flushPendingRun();
 
             for (let index = 0; index < deletedIndices.length; index += 1) {
                 const anchorIndex = deletedIndices[index];
@@ -860,9 +1086,7 @@
     function rebuildTab(tab) {
         tab.panes = tab.panes.map(pane => {
             const parsed = parseTextContent(pane.content);
-            const lineHints = Array.isArray(pane.lineHints) && pane.lineHints.length === parsed.lines.length
-                ? pane.lineHints
-                : Array.from({ length: parsed.lines.length }, () => null);
+            const lineHints = ensureLineHints(parsed.lines, pane.lineHints);
             return {
                 ...pane,
                 ...parsed,
@@ -979,7 +1203,12 @@
             if (line && typeof line === 'object' && !Array.isArray(line)) {
                 return {
                     text: typeof line.text === 'string' ? line.text : '',
-                    hint: line.hint || null
+                    hint: line.hint
+                        ? {
+                            ...line.hint,
+                            preserveIdentity: Boolean(line.hint.preserveIdentity)
+                        }
+                        : null
                 };
             }
 
@@ -988,17 +1217,23 @@
                 hint: null
             };
         });
-        const existingLineHints = Array.isArray(pane.lineHints) && pane.lineHints.length === pane.lines.length
-            ? pane.lineHints
-            : Array.from({ length: pane.lines.length }, () => null);
+        const existingLineHints = ensureLineHints(pane.lines, pane.lineHints);
+        const preservedLineIndices = collectPreservedLineIndices(pane.lines, existingLineHints, startLine, endLine);
         const nextLines = pane.lines
             .slice(0, startLine)
             .concat(normalizedReplacement.map((line) => line.text))
             .concat(pane.lines.slice(endLine));
         const nextLineHints = existingLineHints
             .slice(0, startLine)
+            .map((hint, lineIndex) => ({
+                ...hint,
+                preserveIdentity: preservedLineIndices.has(lineIndex)
+            }))
             .concat(normalizedReplacement.map((line) => line.hint))
-            .concat(existingLineHints.slice(endLine));
+            .concat(existingLineHints.slice(endLine).map((hint, offset) => ({
+                ...hint,
+                preserveIdentity: preservedLineIndices.has(endLine + offset)
+            })));
 
         const nextPane = {
             ...pane,
