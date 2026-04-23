@@ -46,6 +46,8 @@ After a scan, the tree shows files and folders found across the configured roots
 | Collapse All | Collapses the tree. |
 | Undo | Reverts the most recent main-page copy or delete action. |
 | Redo | Reapplies the most recently undone main-page action. |
+| Copy | Runs one batch copy for all rows that have a selected source and one or more selected targets. |
+| Delete | Runs one batch delete for all selected existing targets. |
 | Folder chevron | Expands or collapses one folder. |
 
 ### File Actions
@@ -56,27 +58,27 @@ Each file row can expose these actions in the right sticky action column.
 | --- | --- |
 | Diffuse | Opens the selected existing files in the external Diffuse tool. Requires at least two existing files. |
 | Difference | Opens the built-in Difference Viewer for that file across all configured targets. |
-| Copy | Copies the selected source file into the checked target locations. |
-| Delete | Deletes the checked existing files after confirmation. |
 
-Use the radio button in a target column to choose the source file. Use checkboxes to choose target locations.
+Use the radio button in a target column to choose the source file. Use checkboxes to choose target locations, then use the global `Copy` or `Delete` buttons in the tree toolbar.
 
 ### Folder Actions
 
-Folder rows support bulk actions.
+Folder rows participate in the same global batch actions.
 
 | Action | What it does |
 | --- | --- |
-| Copy | Copies the selected source folder into the checked target folder locations. |
-| Delete | Deletes the checked existing folders after confirmation. |
+| Copy | Copies selected source folders into checked target folder locations. |
+| Delete | Deletes checked existing folders after confirmation. |
 
 Use the radio button to choose the source folder. Use checkboxes to choose target folder locations.
 
 ### Main Page Undo and Redo
 
-Main-page `Copy` and `Delete` actions are stored in an in-memory action history. Each action keeps temporary snapshots of the affected target paths, so `Undo` can restore deleted items or previous overwritten target content, and `Redo` can reapply the same result.
+Main-page `Copy` and `Delete` actions are stored in an in-memory action history. A batch copy or delete is stored as one undo step. Each action keeps temporary snapshots of the affected target paths, so `Undo` can restore deleted items or previous overwritten target content, and `Redo` can reapply the same result.
 
 Use the toolbar buttons, `Ctrl+Z`, `Ctrl+Y`, or `Ctrl+Shift+Z` while focus is not inside an input field. History is kept for the current app session and is cleared when the app closes.
+
+Before a global batch action runs, the app shows a confirmation popup with the planned file and folder operations. Nested selections are skipped when a selected parent folder already covers them.
 
 ### Scanning Behavior
 

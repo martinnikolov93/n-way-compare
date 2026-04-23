@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('api', {
     runCommand: (data) => ipcRenderer.invoke('run-command', data),
     copyFolder: (data) => ipcRenderer.invoke('copy-folder', data),
     deleteFolder: (path) => ipcRenderer.invoke('delete-folder', path),
+    runMainActions: (actions) => ipcRenderer.invoke('run-main-actions', actions),
     onUpdateStatus: (callback) => {
         const listener = (event, status) => callback(status);
         ipcRenderer.on('update-status', listener);

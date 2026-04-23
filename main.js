@@ -1192,117 +1192,220 @@ function applyActionState(record, stateName) {
     notifyFolderChanged();
 }
 
-function executeCopyFileAction({ src, targets }) {
-    const actionTargets = normalizeActionTargets(targets);
-    const record = createActionRecord('copy-file', `Copy ${actionTargets.length} file${actionTargets.length === 1 ? '' : 's'}`);
+function countMainActionTargets(action) {
+    return normalizeActionTargets(action?.targets).length;
+}
+
+function normalizeMainActions(actions) {
+    return (Array.isArray(actions) ? actions : [actions])
+        .filter(Boolean)
+        .map(action => ({
+            type: String(action.type || '').trim(),
+            src: action.src ? String(action.src) : '',
+            targets: normalizeActionTargets(action.targets)
+        }))
+        .filter(action => action.type && action.targets.length);
+}
+
+function createMainActionLabel(actions) {
+    if (actions.length === 1) {
+        const [action] = actions;
+        const count = countMainActionTargets(action);
+
+        if (action.type === 'copy-file') {
+            return `Copy ${count} file${count === 1 ? '' : 's'}`;
+        }
+
+        if (action.type === 'delete-file') {
+            return `Delete ${count} file${count === 1 ? '' : 's'}`;
+        }
+
+        if (action.type === 'copy-folder') {
+            return `Copy ${count} folder${count === 1 ? '' : 's'}`;
+        }
+
+        if (action.type === 'delete-folder') {
+            return `Delete ${count} folder${count === 1 ? '' : 's'}`;
+        }
+    }
+
+    const copied = actions
+        .filter(action => action.type.startsWith('copy-'))
+        .reduce((total, action) => total + countMainActionTargets(action), 0);
+    const deleted = actions
+        .filter(action => action.type.startsWith('delete-'))
+        .reduce((total, action) => total + countMainActionTargets(action), 0);
+    const parts = [];
+
+    if (copied) {
+        parts.push(`${copied} copied`);
+    }
+
+    if (deleted) {
+        parts.push(`${deleted} deleted`);
+    }
+
+    return `Batch action (${parts.join(', ') || '0 items'})`;
+}
+
+function getCopyTargets(action) {
+    const resolvedSource = path.resolve(action.src);
+    return normalizeActionTargets(action.targets)
+        .filter(target => path.resolve(target) !== resolvedSource);
+}
+
+function appendCopyFileAction(record, action) {
+    if (!action.src || !fs.existsSync(action.src)) {
+        throw new Error(`Source file does not exist: ${action.src}`);
+    }
+
+    const targets = getCopyTargets(action);
+
+    targets.forEach(target => {
+        const index = record.items.length;
+        const before = capturePathState(record, target, index, 'before');
+        const item = { target, before, after: { existed: false, backupPath: '' } };
+        record.items.push(item);
+
+        ensureParentDir(target);
+        fs.copyFileSync(action.src, target);
+        item.after = capturePathState(record, target, index, 'after');
+    });
+
+    return targets;
+}
+
+function appendDeleteFileAction(record, action) {
+    const targets = normalizeActionTargets(action.targets);
+
+    targets.forEach(target => {
+        const index = record.items.length;
+        const before = capturePathState(record, target, index, 'before');
+        const item = {
+            target,
+            before,
+            after: {
+                existed: false,
+                backupPath: ''
+            }
+        };
+        record.items.push(item);
+
+        if (before.existed) {
+            removePath(target);
+        }
+    });
+
+    return targets;
+}
+
+function appendCopyFolderAction(record, action) {
+    if (!action.src || !fs.existsSync(action.src)) {
+        throw new Error(`Source folder does not exist: ${action.src}`);
+    }
+
+    const targets = getCopyTargets(action);
+
+    targets.forEach(target => {
+        const index = record.items.length;
+        const before = capturePathState(record, target, index, 'before');
+        const item = { target, before, after: { existed: false, backupPath: '' } };
+        record.items.push(item);
+
+        copyDirectoryContents(action.src, target);
+        item.after = capturePathState(record, target, index, 'after');
+    });
+
+    return targets;
+}
+
+function appendDeleteFolderAction(record, action) {
+    const targets = normalizeActionTargets(action.targets);
+
+    targets.forEach(target => {
+        const index = record.items.length;
+        const before = capturePathState(record, target, index, 'before');
+        const item = {
+            target,
+            before,
+            after: {
+                existed: false,
+                backupPath: ''
+            }
+        };
+        record.items.push(item);
+
+        if (before.existed) {
+            removePath(target);
+        }
+    });
+
+    return targets;
+}
+
+function appendMainAction(record, action) {
+    if (action.type === 'copy-file') {
+        return appendCopyFileAction(record, action);
+    }
+
+    if (action.type === 'delete-file') {
+        return appendDeleteFileAction(record, action);
+    }
+
+    if (action.type === 'copy-folder') {
+        return appendCopyFolderAction(record, action);
+    }
+
+    if (action.type === 'delete-folder') {
+        return appendDeleteFolderAction(record, action);
+    }
+
+    throw new Error(`Unsupported action type: ${action.type}`);
+}
+
+function executeMainActionsBatch(actions, label = '') {
+    const normalizedActions = normalizeMainActions(actions);
+
+    if (!normalizedActions.length) {
+        return {
+            success: false,
+            message: 'No actions to run',
+            history: getActionHistoryState()
+        };
+    }
+
+    const record = createActionRecord('batch', label || createMainActionLabel(normalizedActions));
+    const dirtyPaths = [];
 
     try {
-        actionTargets.forEach((target, index) => {
-            const before = capturePathState(record, target, index, 'before');
-            const item = { target, before, after: { existed: false, backupPath: '' } };
-            record.items.push(item);
-
-            ensureParentDir(target);
-            fs.copyFileSync(src, target);
-            item.after = capturePathState(record, target, index, 'after');
+        normalizedActions.forEach(action => {
+            dirtyPaths.push(...appendMainAction(record, action));
         });
 
         pushUndoAction(record);
-        markPathsDirty(actionTargets);
+        markPathsDirty(dirtyPaths);
         return { success: true, history: getActionHistoryState() };
     } catch (err) {
         rollbackAction(record);
         cleanupActionRecord(record);
         throw err;
     }
+}
+
+function executeCopyFileAction({ src, targets }) {
+    return executeMainActionsBatch({ type: 'copy-file', src, targets });
 }
 
 function executeDeleteFileAction(targets) {
-    const actionTargets = normalizeActionTargets(targets);
-    const record = createActionRecord('delete-file', `Delete ${actionTargets.length} file${actionTargets.length === 1 ? '' : 's'}`);
-
-    try {
-        actionTargets.forEach((target, index) => {
-            const before = capturePathState(record, target, index, 'before');
-            const item = {
-                target,
-                before,
-                after: {
-                    existed: false,
-                    backupPath: ''
-                }
-            };
-            record.items.push(item);
-
-            if (before.existed) {
-                removePath(target);
-            }
-        });
-
-        pushUndoAction(record);
-        markPathsDirty(actionTargets);
-        return { success: true, history: getActionHistoryState() };
-    } catch (err) {
-        rollbackAction(record);
-        cleanupActionRecord(record);
-        throw err;
-    }
+    return executeMainActionsBatch({ type: 'delete-file', targets });
 }
 
 function executeCopyFolderAction({ src, targets }) {
-    const actionTargets = normalizeActionTargets(targets);
-    const record = createActionRecord('copy-folder', `Copy ${actionTargets.length} folder${actionTargets.length === 1 ? '' : 's'}`);
-
-    try {
-        actionTargets.forEach((target, index) => {
-            const before = capturePathState(record, target, index, 'before');
-            const item = { target, before, after: { existed: false, backupPath: '' } };
-            record.items.push(item);
-
-            copyDirectoryContents(src, target);
-            item.after = capturePathState(record, target, index, 'after');
-        });
-
-        pushUndoAction(record);
-        markPathsDirty(actionTargets);
-        return { success: true, history: getActionHistoryState() };
-    } catch (err) {
-        rollbackAction(record);
-        cleanupActionRecord(record);
-        throw err;
-    }
+    return executeMainActionsBatch({ type: 'copy-folder', src, targets });
 }
 
 function executeDeleteFolderAction(targets) {
-    const actionTargets = normalizeActionTargets(targets);
-    const record = createActionRecord('delete-folder', `Delete ${actionTargets.length} folder${actionTargets.length === 1 ? '' : 's'}`);
-
-    try {
-        actionTargets.forEach((target, index) => {
-            const before = capturePathState(record, target, index, 'before');
-            const item = {
-                target,
-                before,
-                after: {
-                    existed: false,
-                    backupPath: ''
-                }
-            };
-            record.items.push(item);
-
-            if (before.existed) {
-                removePath(target);
-            }
-        });
-
-        pushUndoAction(record);
-        markPathsDirty(actionTargets);
-        return { success: true, history: getActionHistoryState() };
-    } catch (err) {
-        rollbackAction(record);
-        cleanupActionRecord(record);
-        throw err;
-    }
+    return executeMainActionsBatch({ type: 'delete-folder', targets });
 }
 
 ipcMain.handle('copy-file', async (e, data) => {
@@ -1337,6 +1440,15 @@ ipcMain.handle('delete-folder', async (e, targets) => {
         return executeDeleteFolderAction(targets);
     } catch (err) {
         console.error('Folder delete error:', err);
+        throw err;
+    }
+});
+
+ipcMain.handle('run-main-actions', async (e, actions) => {
+    try {
+        return executeMainActionsBatch(actions);
+    } catch (err) {
+        console.error('Batch action error:', err);
         throw err;
     }
 });

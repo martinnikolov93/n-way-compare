@@ -9,9 +9,11 @@ let activeRenderController = null;
 let statsRefreshTimer = null;
 let mainActionHistoryState = { canUndo: false, canRedo: false, undoLabel: '', redoLabel: '' };
 let mainActionHistoryBusy = false;
+let mainBatchActionBusy = false;
 let appToastTimer = null;
 
 const collapseState = {};
+const comparisonSelections = new Map();
 let lastWatchedDirs = [];
 let lastWatchedExclusions = [];
 let scanPromise = null;
@@ -33,7 +35,7 @@ const SCAN_OVERLAY_STEPS = Object.freeze([
 const COMPARE_LAYOUT = Object.freeze({
     nameWidth: 360,
     directoryWidth: 168,
-    actionsWidth: 312
+    actionsWidth: 176
 });
 
 function arraysEqual(a, b) {
@@ -141,6 +143,391 @@ function undoMainAction() {
 
 function redoMainAction() {
     return performMainActionHistoryCommand('redoMainAction', 'Redo successful');
+}
+
+function getComparisonSelectionKey(kind, relativePath = '') {
+    return `${kind}:${normalizeDataPath(relativePath)}`;
+}
+
+function getComparisonSelection(kind, relativePath = '', create = false) {
+    const normalizedPath = normalizeDataPath(relativePath);
+    const key = getComparisonSelectionKey(kind, normalizedPath);
+
+    if (!comparisonSelections.has(key) && create) {
+        comparisonSelections.set(key, {
+            kind,
+            relativePath: normalizedPath,
+            sourceIndex: null,
+            targetIndexes: new Set()
+        });
+    }
+
+    return comparisonSelections.get(key) || null;
+}
+
+function cleanupComparisonSelection(selection) {
+    if (!selection) {
+        return;
+    }
+
+    if (selection.sourceIndex === null && selection.targetIndexes.size === 0) {
+        comparisonSelections.delete(getComparisonSelectionKey(selection.kind, selection.relativePath));
+    }
+}
+
+function clearComparisonSelections() {
+    comparisonSelections.clear();
+    activeRenderController?.refreshSelectionControls?.();
+}
+
+function updateSelectionSource(kind, relativePath, dirIndex) {
+    const selection = getComparisonSelection(kind, relativePath, true);
+    selection.sourceIndex = dirIndex;
+    cleanupComparisonSelection(selection);
+    activeRenderController?.refreshMainActionButtons?.();
+}
+
+function updateSelectionTarget(kind, relativePath, dirIndex, checked) {
+    const selection = getComparisonSelection(kind, relativePath, true);
+
+    if (checked) {
+        selection.targetIndexes.add(dirIndex);
+    } else {
+        selection.targetIndexes.delete(dirIndex);
+    }
+
+    cleanupComparisonSelection(selection);
+    activeRenderController?.refreshMainActionButtons?.();
+}
+
+function getFolderNodeByRelativePath(relativePath = '') {
+    const normalizedPath = normalizeDataPath(relativePath);
+    if (!normalizedPath) {
+        return currentTree;
+    }
+
+    return getTreeFolderNode(normalizedPath.split('/').filter(Boolean));
+}
+
+function getSelectionTargetPath(kind, relativePath, dirIndex) {
+    const normalizedPath = normalizeDataPath(relativePath);
+
+    if (kind === 'folder') {
+        return normalizedPath ? buildFileTargetPath(dirs[dirIndex], normalizedPath) : dirs[dirIndex];
+    }
+
+    return currentData[normalizedPath]?.[dirIndex]?.path || buildFileTargetPath(dirs[dirIndex], normalizedPath);
+}
+
+function selectionExistsInDir(kind, relativePath, dirIndex) {
+    const normalizedPath = normalizeDataPath(relativePath);
+
+    if (kind === 'folder') {
+        const node = getFolderNodeByRelativePath(normalizedPath);
+        return Boolean(node && folderExistsInDir(dirIndex, node));
+    }
+
+    return Boolean(currentData[normalizedPath]?.[dirIndex]);
+}
+
+function getSelectionTitle(kind, relativePath) {
+    const normalizedPath = normalizeDataPath(relativePath);
+
+    if (!normalizedPath) {
+        return 'Workspace root';
+    }
+
+    return kind === 'folder'
+        ? normalizedPath.split('/').pop()
+        : getFileName(normalizedPath);
+}
+
+function isDescendantPath(candidatePath, parentPath) {
+    const candidate = normalizeDataPath(candidatePath);
+    const parent = normalizeDataPath(parentPath);
+
+    if (!parent) {
+        return Boolean(candidate);
+    }
+
+    return candidate.startsWith(`${parent}/`);
+}
+
+function getSelectedTargetIndexes(selection, mode) {
+    return Array.from(selection.targetIndexes)
+        .filter(index => index >= 0 && index < dirs.length)
+        .filter(index => mode !== 'copy' || index !== selection.sourceIndex);
+}
+
+function createSelectionPreviewAction(selection, mode, targetIndexes) {
+    const kind = selection.kind;
+    const relativePath = selection.relativePath;
+    const sourceIndex = selection.sourceIndex;
+    const type = mode === 'copy'
+        ? `copy-${kind}`
+        : `delete-${kind}`;
+    const sourcePath = mode === 'copy'
+        ? getSelectionTargetPath(kind, relativePath, sourceIndex)
+        : '';
+    const targets = targetIndexes.map(index => getSelectionTargetPath(kind, relativePath, index));
+
+    return {
+        type,
+        kind,
+        relativePath,
+        title: getSelectionTitle(kind, relativePath),
+        src: sourcePath,
+        targets,
+        sourceIndex,
+        targetIndexes,
+        sourceLabel: sourceIndex === null ? '' : (getFolderName(dirs[sourceIndex]) || `Column ${sourceIndex + 1}`),
+        targetLabels: targetIndexes.map(index => getFolderName(dirs[index]) || `Column ${index + 1}`),
+        overwriteCount: mode === 'copy'
+            ? targetIndexes.filter(index => selectionExistsInDir(kind, relativePath, index)).length
+            : 0
+    };
+}
+
+function pruneCoveredCopyTargets(items) {
+    const folderSelections = items
+        .filter(item => item.selection.kind === 'folder' && item.selection.sourceIndex !== null)
+        .map(item => ({
+            relativePath: item.selection.relativePath,
+            sourceIndex: item.selection.sourceIndex,
+            targetIndexes: new Set(item.targetIndexes)
+        }));
+    let prunedCount = 0;
+
+    const nextItems = items
+        .map(item => {
+            if (!item.selection.relativePath) {
+                return item;
+            }
+
+            const nextTargetIndexes = item.targetIndexes.filter(targetIndex => {
+                const isCovered = folderSelections.some(folder => (
+                    folder !== item &&
+                    folder.sourceIndex === item.selection.sourceIndex &&
+                    folder.targetIndexes.has(targetIndex) &&
+                    isDescendantPath(item.selection.relativePath, folder.relativePath)
+                ));
+
+                if (isCovered) {
+                    prunedCount += 1;
+                }
+
+                return !isCovered;
+            });
+
+            return { ...item, targetIndexes: nextTargetIndexes };
+        })
+        .filter(item => item.targetIndexes.length);
+
+    return { items: nextItems, prunedCount };
+}
+
+function pruneCoveredDeleteTargets(items) {
+    const folderTargets = items
+        .filter(item => item.selection.kind === 'folder')
+        .flatMap(item => item.targetIndexes.map(targetIndex => ({
+            relativePath: item.selection.relativePath,
+            targetIndex
+        })));
+    let prunedCount = 0;
+
+    const nextItems = items
+        .map(item => {
+            if (!item.selection.relativePath) {
+                return item;
+            }
+
+            const nextTargetIndexes = item.targetIndexes.filter(targetIndex => {
+                const isCovered = folderTargets.some(folder => (
+                    folder.targetIndex === targetIndex &&
+                    isDescendantPath(item.selection.relativePath, folder.relativePath)
+                ));
+
+                if (isCovered) {
+                    prunedCount += 1;
+                }
+
+                return !isCovered;
+            });
+
+            return { ...item, targetIndexes: nextTargetIndexes };
+        })
+        .filter(item => item.targetIndexes.length);
+
+    return { items: nextItems, prunedCount };
+}
+
+function buildMainBatchPreview(mode) {
+    const selectionItems = Array.from(comparisonSelections.values())
+        .map(selection => {
+            const targetIndexes = getSelectedTargetIndexes(selection, mode)
+                .filter(index => mode === 'copy' || selectionExistsInDir(selection.kind, selection.relativePath, index));
+
+            return { selection, targetIndexes };
+        })
+        .filter(item => item.targetIndexes.length)
+        .filter(item => mode !== 'copy' || (
+            item.selection.sourceIndex !== null &&
+            selectionExistsInDir(item.selection.kind, item.selection.relativePath, item.selection.sourceIndex)
+        ));
+
+    const pruned = mode === 'copy'
+        ? pruneCoveredCopyTargets(selectionItems)
+        : pruneCoveredDeleteTargets(selectionItems);
+
+    const actions = pruned.items.map(item => createSelectionPreviewAction(item.selection, mode, item.targetIndexes));
+    const totalTargets = actions.reduce((total, action) => total + action.targets.length, 0);
+
+    return {
+        mode,
+        actions,
+        totalTargets,
+        prunedCount: pruned.prunedCount
+    };
+}
+
+function formatPreviewActionLine(action) {
+    if (action.type.startsWith('copy-')) {
+        const overwriteText = action.overwriteCount
+            ? `, ${action.overwriteCount} overwrite${action.overwriteCount === 1 ? '' : 's'}`
+            : '';
+        return `${action.kind}: ${action.title} | ${action.sourceLabel} -> ${action.targetLabels.join(', ')}${overwriteText}`;
+    }
+
+    return `${action.kind}: ${action.title} | delete from ${action.targetLabels.join(', ')}`;
+}
+
+function showBatchActionPreview(preview) {
+    return new Promise(resolve => {
+        const overlay = document.createElement('div');
+        overlay.className = 'batch-action-overlay';
+        overlay.setAttribute('role', 'dialog');
+        overlay.setAttribute('aria-modal', 'true');
+
+        const card = document.createElement('div');
+        card.className = 'batch-action-card';
+
+        const eyebrow = document.createElement('div');
+        eyebrow.className = 'batch-action-eyebrow';
+        eyebrow.textContent = preview.mode === 'copy' ? 'Batch copy' : 'Batch delete';
+
+        const title = document.createElement('h3');
+        title.className = 'batch-action-title';
+        title.textContent = preview.mode === 'copy'
+            ? `Copy ${preview.totalTargets} selected target${preview.totalTargets === 1 ? '' : 's'}?`
+            : `Delete ${preview.totalTargets} selected item${preview.totalTargets === 1 ? '' : 's'}?`;
+
+        const note = document.createElement('p');
+        note.className = 'batch-action-note';
+        note.textContent = preview.prunedCount
+            ? `${preview.prunedCount} nested selection${preview.prunedCount === 1 ? '' : 's'} will be skipped because a parent folder already covers them.`
+            : 'Review the actions below before continuing.';
+
+        const list = document.createElement('div');
+        list.className = 'batch-action-list';
+
+        preview.actions.slice(0, 18).forEach(action => {
+            const item = document.createElement('div');
+            item.className = 'batch-action-item';
+            item.textContent = formatPreviewActionLine(action);
+            item.title = item.textContent;
+            list.appendChild(item);
+        });
+
+        if (preview.actions.length > 18) {
+            const overflow = document.createElement('div');
+            overflow.className = 'batch-action-overflow';
+            overflow.textContent = `+ ${preview.actions.length - 18} more action${preview.actions.length - 18 === 1 ? '' : 's'}`;
+            list.appendChild(overflow);
+        }
+
+        const actions = document.createElement('div');
+        actions.className = 'batch-action-buttons';
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'app-btn app-btn-secondary';
+        cancelBtn.textContent = 'Cancel';
+
+        const confirmBtn = document.createElement('button');
+        confirmBtn.type = 'button';
+        confirmBtn.className = `app-btn ${preview.mode === 'delete' ? 'app-btn-danger' : 'app-btn-primary'}`;
+        confirmBtn.textContent = preview.mode === 'copy' ? 'Copy selected' : 'Delete selected';
+
+        const close = result => {
+            document.removeEventListener('keydown', handleKeyDown);
+            overlay.remove();
+            resolve(result);
+        };
+
+        const handleKeyDown = event => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                close(false);
+            }
+        };
+
+        cancelBtn.addEventListener('click', () => close(false));
+        confirmBtn.addEventListener('click', () => close(true));
+        overlay.addEventListener('click', event => {
+            if (event.target === overlay) {
+                close(false);
+            }
+        });
+
+        actions.appendChild(cancelBtn);
+        actions.appendChild(confirmBtn);
+        card.appendChild(eyebrow);
+        card.appendChild(title);
+        card.appendChild(note);
+        card.appendChild(list);
+        card.appendChild(actions);
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+        document.addEventListener('keydown', handleKeyDown);
+        confirmBtn.focus();
+    });
+}
+
+async function runGlobalMainBatchAction(mode) {
+    if (mainBatchActionBusy || !window.api.runMainActions) {
+        return;
+    }
+
+    const preview = buildMainBatchPreview(mode);
+
+    if (!preview.actions.length) {
+        showAppToast(
+            mode === 'copy' ? 'Select a source and at least one target first' : 'Select existing targets first',
+            'neutral'
+        );
+        return;
+    }
+
+    const confirmed = await showBatchActionPreview(preview);
+    if (!confirmed) {
+        return;
+    }
+
+    mainBatchActionBusy = true;
+    activeRenderController?.refreshMainActionButtons?.();
+
+    try {
+        const result = await window.api.runMainActions(preview.actions);
+
+        await handleMainActionSuccess(result, mode === 'copy' ? 'Copy successful' : 'Delete successful');
+        clearComparisonSelections();
+        activeRenderController?.refreshSelectionControls?.();
+    } catch (err) {
+        alert('Batch action error: ' + err.message);
+    } finally {
+        mainBatchActionBusy = false;
+        activeRenderController?.refreshMainActionButtons?.();
+    }
 }
 
 function getDirs() {
@@ -910,6 +1297,13 @@ async function performScan(resetCache = false) {
             return alert('Please enter at least 2 folders');
         }
 
+        const dirsChanged = !arraysEqual(dirs, lastWatchedDirs);
+        const exclusionsChanged = !arraysEqual(exclusions, lastWatchedExclusions);
+
+        if (dirsChanged && lastWatchedDirs.length) {
+            clearComparisonSelections();
+        }
+
         fullScanOverlayVisible = shouldShowFullScanOverlay(dirs, exclusions, resetCache);
         if (fullScanOverlayVisible) {
             startScanOverlay({
@@ -955,7 +1349,7 @@ async function performScan(resetCache = false) {
             preservedScrollState = null;
         }
 
-        if (!arraysEqual(dirs, lastWatchedDirs) || !arraysEqual(exclusions, lastWatchedExclusions)) {
+        if (dirsChanged || exclusionsChanged) {
             window.api.watchFolders({ dirs, exclusions });
             lastWatchedDirs = [...dirs];
             lastWatchedExclusions = [...exclusions];
@@ -1308,6 +1702,7 @@ function render() {
     activeRenderController = null;
     const sectionStates = new Map();
     const fileRowStates = new Map();
+    const selectionRefreshers = new Set();
 
     function getTreeNodeById(nodeId) {
         if (!currentTree || !nodeId) {
@@ -1348,6 +1743,26 @@ function render() {
                 fileRowStates.delete(filePath);
             }
         });
+    }
+
+    function registerSelectionControls({ radio, checkbox, kind, relativePath, dirIndex, exists }) {
+        const refresh = () => {
+            const selection = getComparisonSelection(kind, relativePath);
+
+            if (selection?.sourceIndex === dirIndex && !exists) {
+                selection.sourceIndex = null;
+                cleanupComparisonSelection(selection);
+            }
+
+            radio.checked = Boolean(exists && selection?.sourceIndex === dirIndex);
+            checkbox.checked = Boolean(selection?.targetIndexes.has(dirIndex));
+            return true;
+        };
+
+        refresh.radio = radio;
+        refresh.checkbox = checkbox;
+        selectionRefreshers.add(refresh);
+        refresh();
     }
 
     const toolbar = document.createElement('div');
@@ -1395,15 +1810,47 @@ function render() {
     redoBtn.textContent = 'Redo';
     redoBtn.addEventListener('click', () => redoMainAction());
 
+    const globalCopyBtn = document.createElement('button');
+    globalCopyBtn.type = 'button';
+    globalCopyBtn.className = 'app-btn app-btn-primary compare-history-btn';
+    globalCopyBtn.textContent = 'Copy';
+    globalCopyBtn.addEventListener('click', () => runGlobalMainBatchAction('copy'));
+
+    const globalDeleteBtn = document.createElement('button');
+    globalDeleteBtn.type = 'button';
+    globalDeleteBtn.className = 'app-btn app-btn-danger compare-history-btn';
+    globalDeleteBtn.textContent = 'Delete';
+    globalDeleteBtn.addEventListener('click', () => runGlobalMainBatchAction('delete'));
+
+    const pruneSelectionRefreshers = () => {
+        Array.from(selectionRefreshers).forEach(refresh => {
+            if (!refresh.radio.isConnected && !refresh.checkbox.isConnected) {
+                selectionRefreshers.delete(refresh);
+            }
+        });
+    };
+
     const refreshMainActionButtons = () => {
+        pruneSelectionRefreshers();
+        const copyPreview = buildMainBatchPreview('copy');
+        const deletePreview = buildMainBatchPreview('delete');
+
         undoBtn.disabled = mainActionHistoryBusy || !mainActionHistoryState.canUndo;
         redoBtn.disabled = mainActionHistoryBusy || !mainActionHistoryState.canRedo;
+        globalCopyBtn.disabled = mainBatchActionBusy || copyPreview.actions.length === 0;
+        globalDeleteBtn.disabled = mainBatchActionBusy || deletePreview.actions.length === 0;
         undoBtn.title = mainActionHistoryState.canUndo
             ? `Undo ${mainActionHistoryState.undoLabel}`
             : 'No actions to undo';
         redoBtn.title = mainActionHistoryState.canRedo
             ? `Redo ${mainActionHistoryState.redoLabel}`
             : 'No actions to redo';
+        globalCopyBtn.title = copyPreview.actions.length
+            ? `Copy ${copyPreview.totalTargets} selected target${copyPreview.totalTargets === 1 ? '' : 's'}`
+            : 'Select a source and target on one or more rows';
+        globalDeleteBtn.title = deletePreview.actions.length
+            ? `Delete ${deletePreview.totalTargets} selected existing target${deletePreview.totalTargets === 1 ? '' : 's'}`
+            : 'Select existing targets on one or more rows';
     };
 
     toolbarGroup.appendChild(expandBtn);
@@ -1411,6 +1858,8 @@ function render() {
     toolbarGroup.appendChild(collapseBtn);
     toolbarGroup.appendChild(undoBtn);
     toolbarGroup.appendChild(redoBtn);
+    toolbarGroup.appendChild(globalCopyBtn);
+    toolbarGroup.appendChild(globalDeleteBtn);
     refreshMainActionButtons();
 
     const meta = document.createElement('div');
@@ -1468,7 +1917,7 @@ function render() {
 
         const actionPath = document.createElement('div');
         actionPath.className = 'compare-header-path';
-        actionPath.textContent = 'Diff, copy, and delete tools';
+        actionPath.textContent = 'Row diff tools';
 
         actionsSurface.appendChild(actionLabel);
         actionsSurface.appendChild(actionPath);
@@ -1548,7 +1997,7 @@ function render() {
         return { cell };
     }
 
-    function createFolderSlot({ node, dir, dirIndex, fullPath, isRoot, hasDiff, folderCheckboxes, onSourceChange, onTargetChange }) {
+    function createFolderSlot({ node, dir, dirIndex, fullPath, isRoot, hasDiff }) {
         const { cell, surface } = createCompareCell('', 'compare-slot');
         const relativePath = fullPath.replace(/^root[\\/]/, '');
         const folderPath = isRoot ? dir : buildFileTargetPath(dir, relativePath);
@@ -1580,7 +2029,7 @@ function render() {
         radio.disabled = !exists;
         radio.addEventListener('change', event => {
             event.stopPropagation();
-            onSourceChange(folderPath);
+            updateSelectionSource('folder', relativePath, dirIndex);
         });
 
         const checkbox = document.createElement('input');
@@ -1589,10 +2038,17 @@ function render() {
         checkbox.dataset.exists = exists ? 'true' : 'false';
         checkbox.addEventListener('change', event => {
             event.stopPropagation();
-            onTargetChange();
+            updateSelectionTarget('folder', relativePath, dirIndex, checkbox.checked);
         });
 
-        folderCheckboxes.push(checkbox);
+        registerSelectionControls({
+            radio,
+            checkbox,
+            kind: 'folder',
+            relativePath,
+            dirIndex,
+            exists
+        });
 
         const controls = document.createElement('div');
         controls.className = 'compare-slot-controls';
@@ -1604,7 +2060,7 @@ function render() {
         return cell;
     }
 
-    function createFileSlot({ file, dir, entry, rowHasDiff, sourceName, checkboxes, onSourceChange, onTargetChange }) {
+    function createFileSlot({ file, dir, dirIndex, entry, rowHasDiff, sourceName }) {
         const { cell, surface } = createCompareCell('', 'compare-slot');
         const targetPath = entry?.path || buildFileTargetPath(dir, file);
 
@@ -1632,15 +2088,22 @@ function render() {
         radio.type = 'radio';
         radio.name = sourceName;
         radio.disabled = !entry;
-        radio.addEventListener('change', () => onSourceChange(targetPath));
+        radio.addEventListener('change', () => updateSelectionSource('file', file, dirIndex));
 
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
         checkbox.value = targetPath;
         checkbox.dataset.exists = entry ? 'true' : 'false';
-        checkbox.addEventListener('change', onTargetChange);
+        checkbox.addEventListener('change', () => updateSelectionTarget('file', file, dirIndex, checkbox.checked));
 
-        checkboxes.push(checkbox);
+        registerSelectionControls({
+            radio,
+            checkbox,
+            kind: 'file',
+            relativePath: file,
+            dirIndex,
+            exists: Boolean(entry)
+        });
 
         const controls = document.createElement('div');
         controls.className = 'compare-slot-controls';
@@ -1679,23 +2142,14 @@ function render() {
 
         row.appendChild(fileNameCell.cell);
 
-        let selectedSource = null;
-        const checkboxes = [];
-        let refreshFileActions = () => { };
-
         dirs.forEach((dir, dirIndex) => {
             row.appendChild(createFileSlot({
                 file,
                 dir,
+                dirIndex,
                 entry: entries?.[dirIndex],
                 rowHasDiff,
-                sourceName: `file-${file}`,
-                checkboxes,
-                onSourceChange: sourcePath => {
-                    selectedSource = sourcePath;
-                    refreshFileActions();
-                },
-                onTargetChange: () => refreshFileActions()
+                sourceName: `file-${file}`
             }));
         });
 
@@ -1739,73 +2193,10 @@ function render() {
             }
         });
 
-        const copyBtn = createActionButton({
-            label: 'Copy',
-            title: 'Copy the selected file into the checked targets',
-            disabled: true,
-            onClick: () => {
-                if (!selectedSource) {
-                    return alert('Select source');
-                }
-
-                const targets = checkboxes
-                    .filter(checkbox => checkbox.checked && checkbox.value !== selectedSource)
-                    .map(checkbox => checkbox.value);
-
-                if (!targets.length) {
-                    return alert('No targets selected');
-                }
-
-                window.api.copyFile({ src: selectedSource, targets })
-                    .then(result => {
-                        handleMainActionSuccess(result, 'Copied!');
-                    })
-                    .catch(err => alert('Error: ' + err.message));
-            }
-        });
-
-        const deleteBtn = createActionButton({
-            label: 'Delete',
-            className: 'is-danger',
-            title: 'Delete the checked existing files',
-            disabled: true,
-            onClick: () => {
-                const targets = checkboxes
-                    .filter(checkbox => checkbox.checked && checkbox.dataset.exists === 'true')
-                    .map(checkbox => checkbox.value);
-
-                if (!targets.length) {
-                    return alert('No existing targets selected');
-                }
-
-                if (!confirm(`Delete ${targets.length} file(s)?`)) {
-                    return;
-                }
-
-                window.api.deleteFile(targets)
-                    .then(result => {
-                        handleMainActionSuccess(result, 'Deleted!');
-                    })
-                    .catch(err => alert('Error: ' + err.message));
-            }
-        });
-
         fileActionGroup.appendChild(diffuseBtn);
         fileActionGroup.appendChild(differenceBtn);
-        fileActionGroup.appendChild(copyBtn);
-        fileActionGroup.appendChild(deleteBtn);
         fileActionSurface.appendChild(fileActionGroup);
         row.appendChild(fileActionCell);
-
-        refreshFileActions = () => {
-            const checkedTargets = checkboxes.filter(checkbox => checkbox.checked);
-            const existingTargets = checkedTargets.filter(checkbox => checkbox.dataset.exists === 'true');
-
-            copyBtn.disabled = !selectedSource || !checkedTargets.some(checkbox => checkbox.value !== selectedSource);
-            deleteBtn.disabled = existingTargets.length === 0;
-        };
-
-        refreshFileActions();
         fileRowStates.set(file, {
             filePath: file,
             parentNodeId,
@@ -1903,10 +2294,6 @@ function render() {
 
                     nextHeader.appendChild(nameCell.cell);
 
-                    let selectedSourceFolder = null;
-                    const folderCheckboxes = [];
-                    let refreshFolderActions = () => { };
-
                     dirs.forEach((dir, dirIndex) => {
                         nextHeader.appendChild(createFolderSlot({
                             node: nextNode,
@@ -1914,86 +2301,15 @@ function render() {
                             dirIndex,
                             fullPath,
                             isRoot,
-                            hasDiff: nextHasDiff,
-                            folderCheckboxes,
-                            onSourceChange: folderPath => {
-                                selectedSourceFolder = folderPath;
-                                refreshFolderActions();
-                            },
-                            onTargetChange: () => refreshFolderActions()
+                            hasDiff: nextHasDiff
                         }));
                     });
 
                     const { cell: actionCell, surface: actionSurface } = createCompareCell('compare-actions-cell', 'compare-actions-panel');
                     const actionGroup = document.createElement('div');
                     actionGroup.className = 'compare-action-group';
-
-                    const copyFolderBtn = createActionButton({
-                        label: 'Copy',
-                        className: 'is-primary',
-                        title: 'Copy the selected folder into the checked targets',
-                        disabled: true,
-                        onClick: () => {
-                            if (!selectedSourceFolder) {
-                                return alert('Select source folder');
-                            }
-
-                            const targets = folderCheckboxes
-                                .filter(checkbox => checkbox.checked && checkbox.value !== selectedSourceFolder)
-                                .map(checkbox => checkbox.value);
-
-                            if (!targets.length) {
-                                return alert('No targets selected');
-                            }
-
-                            window.api.copyFolder({ src: selectedSourceFolder, targets })
-                                .then(result => {
-                                    handleMainActionSuccess(result, 'Folder copied!');
-                                })
-                                .catch(err => alert(err.message));
-                        }
-                    });
-
-                    const deleteFolderBtn = createActionButton({
-                        label: 'Delete',
-                        className: 'is-danger',
-                        title: 'Delete the checked existing folders',
-                        disabled: true,
-                        onClick: () => {
-                            const targets = folderCheckboxes
-                                .filter(checkbox => checkbox.checked && checkbox.dataset.exists === 'true')
-                                .map(checkbox => checkbox.value);
-
-                            if (!targets.length) {
-                                return alert('No existing targets selected');
-                            }
-
-                            if (!confirm(`Delete selected folders?\n${targets.join('\n')}`)) {
-                                return;
-                            }
-
-                            window.api.deleteFolder(targets)
-                                .then(result => {
-                                    handleMainActionSuccess(result, 'Deleted!');
-                                })
-                                .catch(err => alert(err.message));
-                        }
-                    });
-
-                    actionGroup.appendChild(copyFolderBtn);
-                    actionGroup.appendChild(deleteFolderBtn);
                     actionSurface.appendChild(actionGroup);
                     nextHeader.appendChild(actionCell);
-
-                    refreshFolderActions = () => {
-                        const checkedTargets = folderCheckboxes.filter(checkbox => checkbox.checked);
-                        const existingTargets = checkedTargets.filter(checkbox => checkbox.dataset.exists === 'true');
-
-                        copyFolderBtn.disabled = !selectedSourceFolder || !checkedTargets.some(checkbox => checkbox.value !== selectedSourceFolder);
-                        deleteFolderBtn.disabled = existingTargets.length === 0;
-                    };
-
-                    refreshFolderActions();
 
                     if (sectionState.header && sectionState.header.parentNode) {
                         sectionState.header.parentNode.replaceChild(nextHeader, sectionState.header);
@@ -2081,6 +2397,17 @@ function render() {
             meta.textContent = `${dirs.length} folders | ${currentStats.folders} folders in tree | ${currentStats.files} files | ${currentStats.diffs} diff items`;
         },
         refreshMainActionButtons,
+        refreshSelectionControls() {
+            Array.from(selectionRefreshers).forEach(refresh => {
+                if (!refresh.radio.isConnected && !refresh.checkbox.isConnected) {
+                    selectionRefreshers.delete(refresh);
+                    return;
+                }
+
+                refresh();
+            });
+            refreshMainActionButtons();
+        },
         rerenderFileRow(filePath) {
             const normalizedPath = normalizeDataPath(filePath);
             const state = fileRowStates.get(normalizedPath);
