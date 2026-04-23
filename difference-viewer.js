@@ -353,6 +353,101 @@
             return `repeat(${tab.panes.length}, ${track})`;
         }
 
+        isImageFilePath(filePath) {
+            return Boolean(window.DifferenceFileTypes?.isImageFilePath?.(filePath));
+        }
+
+        getMimeTypeForFilePath(filePath) {
+            return window.DifferenceFileTypes?.getMimeTypeForFilePath?.(filePath) || '';
+        }
+
+        getDescriptorMode(descriptor) {
+            const panes = Array.isArray(descriptor?.panes) ? descriptor.panes : [];
+
+            return panes.length && panes.every((pane) => this.isImageFilePath(pane?.path))
+                ? 'image'
+                : 'text';
+        }
+
+        isImageTab(tab) {
+            return tab?.mode === 'image';
+        }
+
+        getPaneStateText(tab, pane) {
+            if (pane.error) {
+                return 'Load error';
+            }
+
+            if (!pane.exists) {
+                return 'Missing on disk';
+            }
+
+            if (this.isImageTab(tab)) {
+                return 'Image preview only';
+            }
+
+            return pane.dirty ? 'Modified locally' : 'On disk';
+        }
+
+        createPaneHeader(tab, pane, paneIndex) {
+            const header = document.createElement('div');
+            header.className = 'difference-pane-header' + (paneIndex === tab.focusPaneIndex ? ' is-active' : '');
+            header.style.minWidth = this.paneMinWidth + 'px';
+            header.style.maxWidth = this.paneMaxWidth + 'px';
+
+            const labelRow = document.createElement('div');
+            labelRow.className = 'difference-pane-label-row';
+
+            const label = document.createElement('div');
+            label.className = 'difference-pane-label';
+            label.textContent = pane.label;
+
+            const saveBtn = document.createElement('button');
+            const imageTab = this.isImageTab(tab);
+            saveBtn.type = 'button';
+            saveBtn.className = 'difference-pane-btn' + (pane.dirty && !imageTab ? '' : ' is-disabled');
+            saveBtn.textContent = imageTab ? 'View' : (pane.dirty ? 'Save' : 'Saved');
+            saveBtn.title = imageTab
+                ? 'Image preview is read-only in this version'
+                : 'Save this file';
+            saveBtn.addEventListener('click', () => {
+                if (imageTab || !pane.dirty) {
+                    return;
+                }
+
+                this.savePane(tab, paneIndex)
+                    .then(() => this.render())
+                    .catch(err => this.setStatus('Save failed: ' + err.message));
+            });
+
+            labelRow.appendChild(label);
+            labelRow.appendChild(saveBtn);
+
+            const filePath = document.createElement('div');
+            filePath.className = 'difference-pane-file';
+            filePath.textContent = pane.path;
+            filePath.title = pane.path;
+
+            const state = document.createElement('div');
+            state.className = 'difference-pane-state' + (!imageTab && pane.dirty ? ' is-dirty' : '');
+            state.textContent = this.getPaneStateText(tab, pane);
+
+            header.addEventListener('click', () => {
+                if (tab.focusPaneIndex === paneIndex) {
+                    return;
+                }
+
+                tab.focusPaneIndex = paneIndex;
+                this.render();
+            });
+
+            header.appendChild(labelRow);
+            header.appendChild(filePath);
+            header.appendChild(state);
+            this.headerElements[paneIndex] = header;
+            return header;
+        }
+
         setSelection(tab, paneIndex, startRow, endRow, anchorRow = startRow, activeRow = endRow) {
             tab.selection = {
                 paneIndex,
@@ -828,17 +923,24 @@
         }
 
         async loadTab(descriptor, existingId = null) {
+            const mode = this.getDescriptorMode(descriptor);
             const fileResults = await this.api.readFiles(descriptor.panes.map(pane => pane.path));
             const panes = descriptor.panes.map((pane, index) => {
                 const result = fileResults[index] || {};
+                const imagePane = mode === 'image';
+                const textContent = imagePane ? '' : (result.content || '');
+
                 return {
                     path: pane.path,
                     label: pane.label,
                     exists: Boolean(result.exists),
                     savedExists: Boolean(result.exists),
                     error: result.error || '',
-                    content: result.content || '',
-                    savedContent: result.content || '',
+                    content: textContent,
+                    savedContent: textContent,
+                    kind: imagePane ? 'image' : 'text',
+                    mimeType: imagePane ? (result.mimeType || this.getMimeTypeForFilePath(pane.path)) : '',
+                    imageDataUrl: imagePane ? (result.dataUrl || '') : '',
                     dirty: false
                 };
             });
@@ -847,6 +949,7 @@
                 id: existingId || this.createTabId(),
                 title: descriptor.title,
                 relativePath: descriptor.relativePath,
+                mode,
                 descriptor,
                 panes,
                 rows: [],
@@ -856,6 +959,10 @@
                 selection: null,
                 history: this.createTabHistory()
             };
+
+            if (mode === 'image') {
+                return tab;
+            }
 
             return window.DifferenceEngine.rebuildTab(tab);
         }
@@ -952,7 +1059,12 @@
             }
 
             this.syncTabDirtyState(tab);
-            window.DifferenceEngine.rebuildTab(tab);
+            if (this.isImageTab(tab)) {
+                tab.rows = [];
+                tab.hunks = [];
+            } else {
+                window.DifferenceEngine.rebuildTab(tab);
+            }
 
             if (this.pendingRowReveal?.tabId === tab.id) {
                 this.pendingRowReveal = null;
@@ -1174,6 +1286,11 @@
 
         async savePane(tab, paneIndex) {
             this.finishInlineEdit({ commit: true });
+            if (this.isImageTab(tab)) {
+                this.setStatus('Image comparison is preview-only in this version.');
+                return;
+            }
+
             const pane = tab.panes[paneIndex];
             if (!pane || !pane.dirty) {
                 return;
@@ -1793,6 +1910,141 @@
             this.updateOverviewViewport();
         }
 
+        createImagePane(tab, pane, paneIndex) {
+            const paneEl = document.createElement('div');
+            paneEl.className = 'difference-image-pane' + (paneIndex === tab.focusPaneIndex ? ' is-active' : '');
+            paneEl.style.minWidth = this.paneMinWidth + 'px';
+            paneEl.style.maxWidth = this.paneMaxWidth + 'px';
+            paneEl.addEventListener('click', () => {
+                if (tab.focusPaneIndex === paneIndex) {
+                    return;
+                }
+
+                tab.focusPaneIndex = paneIndex;
+                this.render();
+            });
+
+            const viewport = document.createElement('div');
+            viewport.className = 'difference-image-viewport';
+
+            const meta = document.createElement('div');
+            meta.className = 'difference-image-meta';
+
+            if (pane.error) {
+                const placeholder = document.createElement('div');
+                placeholder.className = 'difference-image-placeholder';
+
+                const title = document.createElement('div');
+                title.className = 'difference-image-placeholder-title';
+                title.textContent = 'Unable to load image';
+
+                const detail = document.createElement('div');
+                detail.className = 'difference-image-placeholder-detail';
+                detail.textContent = pane.error;
+
+                placeholder.appendChild(title);
+                placeholder.appendChild(detail);
+                viewport.appendChild(placeholder);
+                meta.textContent = 'Load error';
+            } else if (!pane.exists || !pane.imageDataUrl) {
+                const placeholder = document.createElement('div');
+                placeholder.className = 'difference-image-placeholder';
+
+                const title = document.createElement('div');
+                title.className = 'difference-image-placeholder-title';
+                title.textContent = 'Missing on disk';
+
+                const detail = document.createElement('div');
+                detail.className = 'difference-image-placeholder-detail';
+                detail.textContent = 'This target does not have the image file yet.';
+
+                placeholder.appendChild(title);
+                placeholder.appendChild(detail);
+                viewport.appendChild(placeholder);
+                meta.textContent = 'No image available';
+            } else {
+                const frame = document.createElement('div');
+                frame.className = 'difference-image-frame';
+
+                const image = document.createElement('img');
+                image.className = 'difference-image';
+                image.src = pane.imageDataUrl;
+                image.alt = basename(pane.path);
+                image.decoding = 'async';
+                image.addEventListener('load', () => {
+                    const typeLabel = (pane.mimeType || this.getMimeTypeForFilePath(pane.path) || 'image')
+                        .replace(/^image\//, '')
+                        .toUpperCase();
+                    meta.textContent = `${typeLabel} ${image.naturalWidth}x${image.naturalHeight}`;
+                });
+
+                frame.appendChild(image);
+                viewport.appendChild(frame);
+                meta.textContent = (pane.mimeType || this.getMimeTypeForFilePath(pane.path) || 'image')
+                    .replace(/^image\//, '')
+                    .toUpperCase();
+            }
+
+            paneEl.appendChild(viewport);
+            paneEl.appendChild(meta);
+            return paneEl;
+        }
+
+        renderImageTab(tab, previousTop, previousLeft, shouldResetViewerOpenScroll) {
+            const compare = document.createElement('div');
+            compare.className = 'difference-compare difference-compare--image';
+
+            const templateColumns = this.getPaneTemplateColumns(tab);
+
+            const gridScroll = document.createElement('div');
+            gridScroll.className = 'difference-grid-scroll difference-grid-scroll--image';
+            gridScroll.addEventListener('scroll', () => this.handleGridScroll());
+
+            const grid = document.createElement('div');
+            grid.className = 'difference-grid difference-grid--image';
+
+            const headers = document.createElement('div');
+            headers.className = 'difference-pane-headers';
+            headers.style.gridTemplateColumns = templateColumns;
+            tab.panes.forEach((pane, paneIndex) => {
+                headers.appendChild(this.createPaneHeader(tab, pane, paneIndex));
+            });
+            grid.appendChild(headers);
+            this.headersContainerEl = headers;
+
+            const panesRow = document.createElement('div');
+            panesRow.className = 'difference-image-row';
+            panesRow.style.gridTemplateColumns = templateColumns;
+
+            tab.panes.forEach((pane, paneIndex) => {
+                panesRow.appendChild(this.createImagePane(tab, pane, paneIndex));
+            });
+
+            grid.appendChild(panesRow);
+            gridScroll.appendChild(grid);
+            compare.appendChild(gridScroll);
+            this.bodyEl.appendChild(compare);
+
+            this.gridScroll = gridScroll;
+            this.gridEl = grid;
+            this.activeTemplateColumns = templateColumns;
+            this.activeRenderedTabId = tab.id;
+
+            requestAnimationFrame(() => {
+                if (this.gridScroll) {
+                    this.gridScroll.scrollTop = previousTop;
+                    this.gridScroll.scrollLeft = previousLeft;
+                }
+            });
+
+            if (shouldResetViewerOpenScroll) {
+                this.pendingViewerOpenScrollReset = null;
+            }
+
+            this.updateStatusForTab(tab);
+            this.refreshSelectionVisuals();
+        }
+
         renderActiveTab() {
             if (this.inlineEditor) {
                 this.inlineEditor = null;
@@ -1851,6 +2103,11 @@
                 ? this.pendingRowReveal
                 : null;
 
+            if (this.isImageTab(tab)) {
+                this.renderImageTab(tab, previousTop, previousLeft, shouldResetViewerOpenScroll);
+                return;
+            }
+
             const compare = document.createElement('div');
             compare.className = 'difference-compare';
 
@@ -1870,52 +2127,7 @@
             headers.style.gridTemplateColumns = templateColumns;
 
             tab.panes.forEach((pane, paneIndex) => {
-                const header = document.createElement('div');
-                header.className = 'difference-pane-header' + (paneIndex === tab.focusPaneIndex ? ' is-active' : '');
-                header.style.minWidth = this.paneMinWidth + 'px';
-                header.style.maxWidth = this.paneMaxWidth + 'px';
-
-                const labelRow = document.createElement('div');
-                labelRow.className = 'difference-pane-label-row';
-
-                const label = document.createElement('div');
-                label.className = 'difference-pane-label';
-                label.textContent = pane.label;
-
-                const saveBtn = document.createElement('button');
-                saveBtn.type = 'button';
-                saveBtn.className = 'difference-pane-btn' + (pane.dirty ? '' : ' is-disabled');
-                saveBtn.textContent = pane.dirty ? 'Save' : 'Saved';
-                saveBtn.title = 'Save this file';
-                saveBtn.addEventListener('click', () => {
-                    if (pane.dirty) {
-                        this.savePane(tab, paneIndex)
-                            .then(() => this.render())
-                            .catch(err => this.setStatus('Save failed: ' + err.message));
-                    }
-                });
-
-                labelRow.appendChild(label);
-                labelRow.appendChild(saveBtn);
-
-                const filePath = document.createElement('div');
-                filePath.className = 'difference-pane-file';
-                filePath.textContent = pane.path;
-                filePath.title = pane.path;
-
-                const state = document.createElement('div');
-                state.className = 'difference-pane-state' + (pane.dirty ? ' is-dirty' : '');
-                state.textContent = pane.dirty
-                    ? 'Modified locally'
-                    : pane.exists
-                        ? 'On disk'
-                        : 'Missing on disk';
-
-                header.appendChild(labelRow);
-                header.appendChild(filePath);
-                header.appendChild(state);
-                headers.appendChild(header);
-                this.headerElements[paneIndex] = header;
+                headers.appendChild(this.createPaneHeader(tab, pane, paneIndex));
             });
 
             grid.appendChild(headers);
@@ -2104,6 +2316,27 @@
 
         updateStatusForTab(tab) {
             const activePane = tab.panes[tab.focusPaneIndex];
+            if (this.isImageTab(tab)) {
+                const availableCount = tab.panes.filter((pane) => pane.exists && !pane.error).length;
+                const missingCount = tab.panes.filter((pane) => !pane.exists).length;
+                const errorCount = tab.panes.filter((pane) => Boolean(pane.error)).length;
+                const summaryParts = [
+                    'Active: ' + (activePane?.label || 'n/a'),
+                    `${availableCount} image preview${availableCount === 1 ? '' : 's'}`
+                ];
+
+                if (missingCount) {
+                    summaryParts.push(`${missingCount} missing`);
+                }
+
+                if (errorCount) {
+                    summaryParts.push(`${errorCount} error${errorCount === 1 ? '' : 's'}`);
+                }
+
+                this.setStatus(summaryParts.join(' | '));
+                return;
+            }
+
             const selection = tab.selection
                 ? 'Selection: rows ' + (tab.selection.startRow + 1) + '-' + (tab.selection.endRow + 1)
                 : 'Selection: none';
@@ -2121,17 +2354,18 @@
             const tab = this.getActiveTab();
             const hasSelection = Boolean(tab?.selection);
             const dirtyTabs = this.tabs.some(item => item.panes.some(pane => pane.dirty));
+            const imageTab = this.isImageTab(tab);
 
             this.toggleDisabled(this.saveAllBtn, !dirtyTabs);
             this.toggleDisabled(this.reloadBtn, !tab);
-            this.toggleDisabled(this.prevHunkBtn, !tab || !tab.hunks.length);
-            this.toggleDisabled(this.nextHunkBtn, !tab || !tab.hunks.length);
-            this.toggleDisabled(this.copySelectionLeftBtn, !this.canCopySelectionToNeighbor(-1));
-            this.toggleDisabled(this.copySelectionRightBtn, !this.canCopySelectionToNeighbor(1));
-            this.toggleDisabled(this.copyLeftIntoSelectionBtn, !this.canCopyNeighborIntoSelection(-1));
-            this.toggleDisabled(this.copyRightIntoSelectionBtn, !this.canCopyNeighborIntoSelection(1));
-            this.toggleDisabled(this.mergeLeftRightBtn, !hasSelection || !tab || tab.focusPaneIndex <= 0 || tab.focusPaneIndex >= tab.panes.length - 1);
-            this.toggleDisabled(this.mergeRightLeftBtn, !hasSelection || !tab || tab.focusPaneIndex <= 0 || tab.focusPaneIndex >= tab.panes.length - 1);
+            this.toggleDisabled(this.prevHunkBtn, !tab || imageTab || !tab.hunks.length);
+            this.toggleDisabled(this.nextHunkBtn, !tab || imageTab || !tab.hunks.length);
+            this.toggleDisabled(this.copySelectionLeftBtn, imageTab || !this.canCopySelectionToNeighbor(-1));
+            this.toggleDisabled(this.copySelectionRightBtn, imageTab || !this.canCopySelectionToNeighbor(1));
+            this.toggleDisabled(this.copyLeftIntoSelectionBtn, imageTab || !this.canCopyNeighborIntoSelection(-1));
+            this.toggleDisabled(this.copyRightIntoSelectionBtn, imageTab || !this.canCopyNeighborIntoSelection(1));
+            this.toggleDisabled(this.mergeLeftRightBtn, imageTab || !hasSelection || !tab || tab.focusPaneIndex <= 0 || tab.focusPaneIndex >= tab.panes.length - 1);
+            this.toggleDisabled(this.mergeRightLeftBtn, imageTab || !hasSelection || !tab || tab.focusPaneIndex <= 0 || tab.focusPaneIndex >= tab.panes.length - 1);
         }
 
         toggleDisabled(element, disabled) {
@@ -2675,6 +2909,9 @@
                 return;
             }
 
+            const activeTab = this.getActiveTab();
+            const imageTab = this.isImageTab(activeTab);
+
             const primaryModifier = event.ctrlKey || event.metaKey;
             const undoShortcut = primaryModifier && !event.shiftKey && !event.altKey && this.eventMatchesShortcutKey(event, {
                 keys: ['z'],
@@ -2706,13 +2943,13 @@
             }
 
             if (!event.ctrlKey && !event.altKey && !event.metaKey) {
-                if (event.shiftKey && event.key === 'ArrowUp') {
+                if (!imageTab && event.shiftKey && event.key === 'ArrowUp') {
                     event.preventDefault();
                     this.queueSelectionMove(-1, true, event.repeat);
                     return;
                 }
 
-                if (event.shiftKey && event.key === 'ArrowDown') {
+                if (!imageTab && event.shiftKey && event.key === 'ArrowDown') {
                     event.preventDefault();
                     this.queueSelectionMove(1, true, event.repeat);
                     return;
@@ -2738,19 +2975,19 @@
                     return;
                 }
 
-                if (event.key === 'ArrowUp') {
+                if (!imageTab && event.key === 'ArrowUp') {
                     event.preventDefault();
                     this.queueSelectionMove(-1, false, event.repeat);
                     return;
                 }
 
-                if (event.key === 'ArrowDown') {
+                if (!imageTab && event.key === 'ArrowDown') {
                     event.preventDefault();
                     this.queueSelectionMove(1, false, event.repeat);
                     return;
                 }
 
-                if (event.key === 'Delete') {
+                if (!imageTab && event.key === 'Delete') {
                     event.preventDefault();
                     this.deleteSelection();
                     return;

@@ -119,6 +119,10 @@ The Difference Viewer is the built-in multi-pane file diff and merge tool. It op
 
 Click a row to select it. Drag within a pane to select multiple rows. Shift-click extends the current selection inside the same pane.
 
+If the selected file is an image, the Difference Viewer switches into image preview mode automatically instead of the text diff grid. The current first version supports side-by-side preview for `png`, `jpg`, `jpeg`, `webp`, `gif`, `bmp`, `svg`, `ico`, and `avif`.
+
+Image tabs are view-only in this version. They do not show inline diff markers, row selections, merge actions, or inline editing controls.
+
 ## Regression Tests
 
 Run `npm test` to execute the diff regression suite.

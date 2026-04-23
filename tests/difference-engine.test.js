@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 
+const DifferenceFileTypes = require('../difference-file-types.js');
 const DifferenceInlineDiff = require('../difference-inline-diff.js');
 const DifferenceTransfer = require('../difference-transfer.js');
 const { createNumberedListFixtures, createProseAlignmentPanes } = require('./fixtures/difference-fixtures.js');
@@ -116,6 +117,20 @@ function buildUpperBlockSignature(tab) {
 
     return rows.join('|');
 }
+
+test('image file type helper recognizes supported image formats including avif', () => {
+    assert.equal(DifferenceFileTypes.isImageFilePath('poster.png'), true);
+    assert.equal(DifferenceFileTypes.isImageFilePath('poster.AVIF'), true);
+    assert.equal(DifferenceFileTypes.isImageFilePath('poster.jpeg'), true);
+    assert.equal(DifferenceFileTypes.isImageFilePath('poster.svg'), true);
+    assert.equal(DifferenceFileTypes.getMimeTypeForFilePath('poster.avif'), 'image/avif');
+});
+
+test('image file type helper leaves text and extensionless files in text mode', () => {
+    assert.equal(DifferenceFileTypes.isImageFilePath('notes.txt'), false);
+    assert.equal(DifferenceFileTypes.isImageFilePath('README'), false);
+    assert.equal(DifferenceFileTypes.isImageFilePath('archive.tar.gz'), false);
+});
 
 test('synthetic prose fixtures keep inserted descriptive lines between the surrounding blank rows', () => {
     const tab = loadWorkspaceFixtureTab();

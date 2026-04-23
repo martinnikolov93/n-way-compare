@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { exec } = require('child_process');
+const DifferenceFileTypes = require('./difference-file-types');
 
 let mainWindow = null;
 let updatePromptOpen = false;
@@ -970,25 +971,52 @@ ipcMain.handle('open-diffuse', async (e, files) => {
 
 ipcMain.handle('read-files', async (e, filePaths) => {
     return filePaths.map(filePath => {
+        const imageFile = DifferenceFileTypes.isImageFilePath(filePath);
+
         try {
             if (!filePath || !fs.existsSync(filePath)) {
                 return {
                     path: filePath,
                     exists: false,
-                    content: ''
+                    kind: imageFile ? 'image' : 'text',
+                    content: '',
+                    dataUrl: '',
+                    mimeType: imageFile
+                        ? DifferenceFileTypes.getMimeTypeForFilePath(filePath)
+                        : ''
+                };
+            }
+
+            if (imageFile) {
+                const buffer = fs.readFileSync(filePath);
+                const mimeType = DifferenceFileTypes.getMimeTypeForFilePath(filePath);
+
+                return {
+                    path: filePath,
+                    exists: true,
+                    kind: 'image',
+                    content: '',
+                    dataUrl: `data:${mimeType};base64,${buffer.toString('base64')}`,
+                    mimeType
                 };
             }
 
             return {
                 path: filePath,
                 exists: true,
+                kind: 'text',
                 content: fs.readFileSync(filePath, 'utf8')
             };
         } catch (err) {
             return {
                 path: filePath,
                 exists: false,
+                kind: imageFile ? 'image' : 'text',
                 content: '',
+                dataUrl: '',
+                mimeType: imageFile
+                    ? DifferenceFileTypes.getMimeTypeForFilePath(filePath)
+                    : '',
                 error: err.message
             };
         }
