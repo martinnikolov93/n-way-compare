@@ -247,100 +247,114 @@ function Draw-InstallerFileGlyph {
     $path.Dispose()
 }
 
-function New-InstallerIconBitmap {
-    param([int]$Size)
+function New-HighQualityGraphics {
+    param([System.Drawing.Bitmap]$Bitmap)
 
-    $palette = @{
-        Border = [System.Drawing.ColorTranslator]::FromHtml('#0B1220')
-        SideCard = [System.Drawing.ColorTranslator]::FromHtml('#F8FAFC')
-        PrimaryCard = [System.Drawing.ColorTranslator]::FromHtml('#14B8A6')
-        SideLines = [System.Drawing.ColorTranslator]::FromHtml('#1F2937')
-        PrimaryLines = [System.Drawing.ColorTranslator]::FromHtml('#ECFEFF')
-    }
-
-    $bitmap = New-Object System.Drawing.Bitmap($Size, $Size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+    $graphics = [System.Drawing.Graphics]::FromImage($Bitmap)
     $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
     $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
     $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+    $graphics.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
+
+    return $graphics
+}
+
+function Get-VisibleBounds {
+    param([System.Drawing.Bitmap]$Bitmap)
+
+    $minX = $Bitmap.Width
+    $minY = $Bitmap.Height
+    $maxX = -1
+    $maxY = -1
+
+    for ($y = 0; $y -lt $Bitmap.Height; $y++) {
+        for ($x = 0; $x -lt $Bitmap.Width; $x++) {
+            if ($Bitmap.GetPixel($x, $y).A -le 8) {
+                continue
+            }
+
+            if ($x -lt $minX) { $minX = $x }
+            if ($y -lt $minY) { $minY = $y }
+            if ($x -gt $maxX) { $maxX = $x }
+            if ($y -gt $maxY) { $maxY = $y }
+        }
+    }
+
+    if ($maxX -lt 0 -or $maxY -lt 0) {
+        return [System.Drawing.Rectangle]::new(0, 0, $Bitmap.Width, $Bitmap.Height)
+    }
+
+    return [System.Drawing.Rectangle]::new(
+        [int]$minX,
+        [int]$minY,
+        [int]($maxX - $minX + 1),
+        [int]($maxY - $minY + 1)
+    )
+}
+
+function New-PreparedLogoSourceBitmap {
+    param(
+        [string]$Path,
+        [int]$CanvasSize = 2048,
+        [double]$PaddingFraction = 0.02
+    )
+
+    if (-not (Test-Path $Path)) {
+        throw "Source logo not found at $Path. Put the image in assets/source-logo.png."
+    }
+
+    $sourceImage = [System.Drawing.Image]::FromFile($Path)
+    $sourceBitmap = New-Object System.Drawing.Bitmap($sourceImage)
+    $sourceImage.Dispose()
+
+    $visibleBounds = Get-VisibleBounds -Bitmap $sourceBitmap
+    $croppedBitmap = $sourceBitmap.Clone($visibleBounds, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $sourceBitmap.Dispose()
+
+    $bitmap = New-Object System.Drawing.Bitmap($CanvasSize, $CanvasSize, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $graphics = New-HighQualityGraphics -Bitmap $bitmap
     $graphics.Clear([System.Drawing.Color]::Transparent)
 
-    $showLines = $Size -ge 32
-    $sideWidth = $Size * 0.24
-    $centerWidth = $Size * 0.30
-    $sideHeight = $Size * 0.60
-    $centerHeight = $Size * 0.74
-    $sideY = $Size * 0.24
-    $centerY = $Size * 0.13
-    $radius = [Math]::Max(1.0, $Size * 0.065)
+    $safePaddingFraction = [Math]::Max(0.0, [Math]::Min(0.2, $PaddingFraction))
+    $availableSize = $CanvasSize * (1 - ($safePaddingFraction * 2))
+    $scale = [Math]::Min($availableSize / $croppedBitmap.Width, $availableSize / $croppedBitmap.Height)
 
-    Draw-InstallerFileGlyph -Graphics $graphics -X ($Size * 0.12) -Y $sideY -Width $sideWidth -Height $sideHeight -Radius $radius -FillColor $palette.SideCard -BorderColor $palette.Border -LineColor $palette.SideLines -ShowLines $showLines
-    Draw-InstallerFileGlyph -Graphics $graphics -X ($Size * 0.64) -Y $sideY -Width $sideWidth -Height $sideHeight -Radius $radius -FillColor $palette.SideCard -BorderColor $palette.Border -LineColor $palette.SideLines -ShowLines $showLines
-    Draw-InstallerFileGlyph -Graphics $graphics -X ($Size * 0.35) -Y $centerY -Width $centerWidth -Height $centerHeight -Radius $radius -FillColor $palette.PrimaryCard -BorderColor $palette.Border -LineColor $palette.PrimaryLines -ShowLines $showLines
+    $drawWidth = [Math]::Max(1, [int][Math]::Round($croppedBitmap.Width * $scale))
+    $drawHeight = [Math]::Max(1, [int][Math]::Round($croppedBitmap.Height * $scale))
+    $drawX = [int][Math]::Round(($CanvasSize - $drawWidth) / 2)
+    $drawY = [int][Math]::Round(($CanvasSize - $drawHeight) / 2)
 
+    $graphics.DrawImage($croppedBitmap, [System.Drawing.Rectangle]::new($drawX, $drawY, $drawWidth, $drawHeight))
     $graphics.Dispose()
+    $croppedBitmap.Dispose()
+
     return $bitmap
+}
+
+function Get-PreparedLogoBitmap {
+    if ($null -eq $script:PreparedLogoBitmap) {
+        throw "Prepared logo bitmap is not initialized. Expected source asset at $script:SourceLogoPath."
+    }
+
+    return $script:PreparedLogoBitmap
+}
+
+function New-LogoBitmap {
+    param([int]$Size)
+
+    return Resize-Bitmap -Source (Get-PreparedLogoBitmap) -Size $Size
+}
+
+function New-InstallerIconBitmap {
+    param([int]$Size)
+
+    return New-LogoBitmap -Size $Size
 }
 
 function New-AppIconBitmap {
     param([int]$Size)
 
-    $palette = @{
-        Background = [System.Drawing.ColorTranslator]::FromHtml('#0B1220')
-        Border = [System.Drawing.ColorTranslator]::FromHtml('#172033')
-        CardBorder = [System.Drawing.ColorTranslator]::FromHtml('#111827')
-        Shadow = [System.Drawing.Color]::FromArgb(70, 0, 0, 0)
-        SideCard = [System.Drawing.ColorTranslator]::FromHtml('#E8EEF6')
-        PrimaryCard = [System.Drawing.ColorTranslator]::FromHtml('#14B8A6')
-        SideFold = [System.Drawing.ColorTranslator]::FromHtml('#CBD5E1')
-        PrimaryFold = [System.Drawing.ColorTranslator]::FromHtml('#0F766E')
-        LightLines = [System.Drawing.ColorTranslator]::FromHtml('#ECFEFF')
-        DarkLines = [System.Drawing.ColorTranslator]::FromHtml('#111827')
-        MarkBackground = [System.Drawing.ColorTranslator]::FromHtml('#111C2F')
-        MarkConnector = [System.Drawing.ColorTranslator]::FromHtml('#475569')
-        MarkSideDot = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
-        MarkCenterDot = [System.Drawing.ColorTranslator]::FromHtml('#22C55E')
-    }
-
-    $bitmap = New-Object System.Drawing.Bitmap($Size, $Size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-    $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-    $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-    $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
-    $graphics.Clear([System.Drawing.Color]::Transparent)
-
-    if ($Size -lt 128) {
-        $smallIcon = New-InstallerIconBitmap -Size $Size
-        $graphics.DrawImage($smallIcon, [System.Drawing.Rectangle]::new(0, 0, $Size, $Size))
-        $smallIcon.Dispose()
-        $graphics.Dispose()
-        return $bitmap
-    }
-
-    $badgeRect = [System.Drawing.RectangleF]::new(
-        [float]($Size * 0.08),
-        [float]($Size * 0.08),
-        [float]($Size * 0.84),
-        [float]($Size * 0.84)
-    )
-    $badgePath = New-RoundedRectanglePath -Rect $badgeRect -Radius ($Size * 0.18)
-    $graphics.FillPath((New-Object System.Drawing.SolidBrush($palette.Background)), $badgePath)
-    $graphics.DrawPath((New-Object System.Drawing.Pen($palette.Border, [Math]::Max(4.0, $Size * 0.018))), $badgePath)
-
-    $cardWidth = $Size * 0.205
-    $sideHeight = $Size * 0.41
-    $middleHeight = $Size * 0.49
-    $sideY = $Size * 0.31
-    $middleY = $Size * 0.245
-
-    Draw-FileCard -Graphics $graphics -Palette $palette -CanvasSize $Size -X ($Size * 0.19) -Y $sideY -Width $cardWidth -Height $sideHeight -FillColor $palette.SideCard -LineColor $palette.DarkLines
-    Draw-FileCard -Graphics $graphics -Palette $palette -CanvasSize $Size -X ($Size * 0.605) -Y $sideY -Width $cardWidth -Height $sideHeight -FillColor $palette.SideCard -LineColor $palette.DarkLines
-    Draw-FileCard -Graphics $graphics -Palette $palette -CanvasSize $Size -X ($Size * 0.3975) -Y $middleY -Width $cardWidth -Height $middleHeight -FillColor $palette.PrimaryCard -LineColor $palette.LightLines -Primary $true
-
-    Draw-CompareMark -Graphics $graphics -Palette $palette -CanvasSize $Size
-
-    $graphics.Dispose()
-    return $bitmap
+    return New-LogoBitmap -Size $Size
 }
 
 function Save-Png {
@@ -365,10 +379,7 @@ function New-InstallerHeaderBitmap {
     $width = 150
     $height = 57
     $bitmap = New-Object System.Drawing.Bitmap($width, $height, [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
-    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-    $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-    $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-    $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+    $graphics = New-HighQualityGraphics -Bitmap $bitmap
 
     $graphics.Clear([System.Drawing.ColorTranslator]::FromHtml('#F8FAFC'))
     $accentBrush = New-Object System.Drawing.SolidBrush([System.Drawing.ColorTranslator]::FromHtml('#14B8A6'))
@@ -376,10 +387,9 @@ function New-InstallerHeaderBitmap {
     $graphics.FillRectangle($lineBrush, 0, $height - 1, $width, 1)
     $graphics.FillRectangle($accentBrush, 0, $height - 3, 46, 3)
 
-    $icon = New-AppIconBitmap -Size 256
-    $graphics.DrawImage($icon, [System.Drawing.Rectangle]::new(102, 8, 40, 40))
+    $icon = Get-PreparedLogoBitmap
+    $graphics.DrawImage($icon, [System.Drawing.Rectangle]::new(98, 5, 48, 48))
 
-    $icon.Dispose()
     $accentBrush.Dispose()
     $lineBrush.Dispose()
     $graphics.Dispose()
@@ -390,10 +400,7 @@ function New-InstallerSidebarBitmap {
     $width = 164
     $height = 314
     $bitmap = New-Object System.Drawing.Bitmap($width, $height, [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
-    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-    $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-    $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-    $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+    $graphics = New-HighQualityGraphics -Bitmap $bitmap
 
     $background = New-Object System.Drawing.SolidBrush([System.Drawing.ColorTranslator]::FromHtml('#0B1220'))
     $panel = New-Object System.Drawing.SolidBrush([System.Drawing.ColorTranslator]::FromHtml('#111C2F'))
@@ -408,8 +415,8 @@ function New-InstallerSidebarBitmap {
     $panelPath = New-RoundedRectanglePath -Rect $panelRect -Radius 18
     $graphics.FillPath($panel, $panelPath)
 
-    $icon = New-AppIconBitmap -Size 256
-    $graphics.DrawImage($icon, [System.Drawing.Rectangle]::new(43, 48, 78, 78))
+    $icon = Get-PreparedLogoBitmap
+    $graphics.DrawImage($icon, [System.Drawing.Rectangle]::new(24, 34, 116, 116))
 
     $fontTitle = New-Object System.Drawing.Font('Segoe UI Semibold', 13, [System.Drawing.FontStyle]::Bold)
     $fontSmall = New-Object System.Drawing.Font('Segoe UI', 8.5)
@@ -419,7 +426,6 @@ function New-InstallerSidebarBitmap {
     $graphics.FillRectangle($muted, 74, 260, 42, 3)
     $graphics.DrawString('Folder diff tool', $fontSmall, $subtleBrush, [System.Drawing.PointF]::new(28, 274))
 
-    $icon.Dispose()
     $fontTitle.Dispose()
     $fontSmall.Dispose()
     $panelPath.Dispose()
@@ -514,48 +520,58 @@ $icoPath = Join-Path $assetsDir 'app-icon.ico'
 $installerIconPath = Join-Path $assetsDir 'installer-icon.ico'
 $installerHeaderPath = Join-Path $assetsDir 'installer-header.bmp'
 $installerSidebarPath = Join-Path $assetsDir 'installer-sidebar.bmp'
+$script:SourceLogoPath = Join-Path $assetsDir 'source-logo.png'
+$script:PreparedLogoBitmap = New-PreparedLogoSourceBitmap -Path $script:SourceLogoPath
 
-$masterBitmap = New-AppIconBitmap -Size 1024
-Save-Png -Bitmap $masterBitmap -Path $pngPath
-$masterBitmap.Dispose()
+try {
+    $masterBitmap = New-AppIconBitmap -Size 1024
+    Save-Png -Bitmap $masterBitmap -Path $pngPath
+    $masterBitmap.Dispose()
 
-$appIcoSourceBitmap = New-AppIconBitmap -Size 128
-$icoImages = @()
-foreach ($iconSize in @(16, 24, 32, 48, 64, 128, 256)) {
-    $icoBitmap = Resize-Bitmap -Source $appIcoSourceBitmap -Size $iconSize
-    $icoBytes = Get-PngBytes -Bitmap $icoBitmap
-    $icoBitmap.Dispose()
+    $appIcoSourceBitmap = New-AppIconBitmap -Size 256
+    $icoImages = @()
+    foreach ($iconSize in @(16, 24, 32, 48, 64, 128, 256)) {
+        $icoBitmap = Resize-Bitmap -Source $appIcoSourceBitmap -Size $iconSize
+        $icoBytes = Get-PngBytes -Bitmap $icoBitmap
+        $icoBitmap.Dispose()
 
-    $icoImages += @{
-        Size = $iconSize
-        Bytes = $icoBytes
+        $icoImages += @{
+            Size = $iconSize
+            Bytes = $icoBytes
+        }
+    }
+    $appIcoSourceBitmap.Dispose()
+
+    Save-Ico -Path $icoPath -Images $icoImages
+
+    $installerIcoImages = @()
+    foreach ($iconSize in @(16, 24, 32, 48, 64, 128, 256)) {
+        $installerIcoBitmap = New-InstallerIconBitmap -Size $iconSize
+        $installerIcoBytes = Get-PngBytes -Bitmap $installerIcoBitmap
+        $installerIcoBitmap.Dispose()
+
+        $installerIcoImages += @{
+            Size = $iconSize
+            Bytes = $installerIcoBytes
+        }
+    }
+
+    Save-Ico -Path $installerIconPath -Images $installerIcoImages
+
+    $installerHeaderBitmap = New-InstallerHeaderBitmap
+    Save-Bmp -Bitmap $installerHeaderBitmap -Path $installerHeaderPath
+    $installerHeaderBitmap.Dispose()
+
+    $installerSidebarBitmap = New-InstallerSidebarBitmap
+    Save-Bmp -Bitmap $installerSidebarBitmap -Path $installerSidebarPath
+    $installerSidebarBitmap.Dispose()
+}
+finally {
+    if ($null -ne $script:PreparedLogoBitmap) {
+        $script:PreparedLogoBitmap.Dispose()
+        $script:PreparedLogoBitmap = $null
     }
 }
-$appIcoSourceBitmap.Dispose()
-
-Save-Ico -Path $icoPath -Images $icoImages
-
-$installerIcoImages = @()
-foreach ($iconSize in @(16, 24, 32, 48, 64, 128, 256)) {
-    $installerIcoBitmap = New-InstallerIconBitmap -Size $iconSize
-    $installerIcoBytes = Get-PngBytes -Bitmap $installerIcoBitmap
-    $installerIcoBitmap.Dispose()
-
-    $installerIcoImages += @{
-        Size = $iconSize
-        Bytes = $installerIcoBytes
-    }
-}
-
-Save-Ico -Path $installerIconPath -Images $installerIcoImages
-
-$installerHeaderBitmap = New-InstallerHeaderBitmap
-Save-Bmp -Bitmap $installerHeaderBitmap -Path $installerHeaderPath
-$installerHeaderBitmap.Dispose()
-
-$installerSidebarBitmap = New-InstallerSidebarBitmap
-Save-Bmp -Bitmap $installerSidebarBitmap -Path $installerSidebarPath
-$installerSidebarBitmap.Dispose()
 
 Write-Host "Generated $pngPath"
 Write-Host "Generated $icoPath"
