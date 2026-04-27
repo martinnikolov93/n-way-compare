@@ -1394,6 +1394,7 @@ function scan(resetCache = false) {
 }
 
 window.api.onFolderChange(() => {
+    window.differenceViewer?.scheduleDiskChangeCheck?.();
     scan();
 });
 

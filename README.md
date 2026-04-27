@@ -123,6 +123,8 @@ If the selected file is an image, the Difference Viewer switches into image prev
 
 Image tabs are view-only in this version. They do not show inline diff markers, row selections, merge actions, or inline editing controls.
 
+If an opened file changes on disk while its Difference tab is still alive, the viewer marks that pane as changed on disk, shows a review notice, and blocks edit/merge actions in that comparison until you choose either `Reload from disk` or `Keep current version`.
+
 ## Regression Tests
 
 Run `npm test` to execute the diff regression suite.

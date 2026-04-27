@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('api', {
     scan: (dirs) => ipcRenderer.invoke('scan', dirs),
     openDiffuse: (files) => ipcRenderer.invoke('open-diffuse', files),
     readFiles: (paths) => ipcRenderer.invoke('read-files', paths),
+    getFileStats: (paths) => ipcRenderer.invoke('get-file-stats', paths),
     writeFile: (data) => ipcRenderer.invoke('write-file', data),
     copyFile: (data) => ipcRenderer.invoke('copy-file', data),
     deleteFile: (filePath) => ipcRenderer.invoke('delete-file', filePath),

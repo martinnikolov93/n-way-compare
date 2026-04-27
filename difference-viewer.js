@@ -97,6 +97,10 @@
             this.lastStatus = 'Open a file from the Difference button to compare and merge changes.';
             this.compareResults = document.getElementById('fileList');
             this.compareResultsPreviousHeight = null;
+            this.pendingDiskChangeCheckTimer = 0;
+            this.pendingDiskChangeNoticeItems = [];
+            this.diskChangeNoticeOpen = false;
+            this.diskChangeNoticeDirty = false;
 
             this.build();
             document.addEventListener('keydown', this.handleKeyDown.bind(this));
@@ -241,7 +245,46 @@
             dialog.appendChild(this.bodyEl);
 
             this.modal.appendChild(dialog);
+            this.buildDiskChangeNotice(dialog);
             document.body.appendChild(this.modal);
+        }
+
+        buildDiskChangeNotice(dialog) {
+            this.diskChangeNoticeEl = document.createElement('div');
+            this.diskChangeNoticeEl.className = 'difference-disk-notice';
+            this.diskChangeNoticeEl.hidden = true;
+
+            const card = document.createElement('div');
+            card.className = 'difference-disk-notice-card';
+
+            const title = document.createElement('div');
+            title.className = 'difference-disk-notice-title';
+            title.textContent = 'Some open files changed on disk.';
+
+            const subtitle = document.createElement('div');
+            subtitle.className = 'difference-disk-notice-subtitle';
+            subtitle.textContent = 'Please review them before continuing.';
+
+            this.diskChangeNoticeListEl = document.createElement('div');
+            this.diskChangeNoticeListEl.className = 'difference-disk-notice-list';
+
+            const actions = document.createElement('div');
+            actions.className = 'difference-disk-notice-actions';
+
+            const reviewBtn = this.createActionButton({
+                className: 'difference-header-btn',
+                label: 'Review changed files',
+                title: 'Close this notice and review the highlighted files',
+                onClick: () => this.reviewDiskChanges()
+            });
+
+            actions.appendChild(reviewBtn);
+            card.appendChild(title);
+            card.appendChild(subtitle);
+            card.appendChild(this.diskChangeNoticeListEl);
+            card.appendChild(actions);
+            this.diskChangeNoticeEl.appendChild(card);
+            dialog.appendChild(this.diskChangeNoticeEl);
         }
 
         createActionButton({ className, label, title, onClick }) {
@@ -378,6 +421,12 @@
                 return 'Load error';
             }
 
+            if (this.hasPaneDiskConflict(pane)) {
+                return pane.dirty && !this.isImageTab(tab)
+                    ? 'Changed on disk + local edits'
+                    : 'Changed on disk';
+            }
+
             if (!pane.exists) {
                 return 'Missing on disk';
             }
@@ -404,14 +453,17 @@
 
             const saveBtn = document.createElement('button');
             const imageTab = this.isImageTab(tab);
+            const interactionLocked = this.tabHasUnresolvedDiskChanges(tab);
             saveBtn.type = 'button';
-            saveBtn.className = 'difference-pane-btn' + (pane.dirty && !imageTab ? '' : ' is-disabled');
+            saveBtn.className = 'difference-pane-btn' + (pane.dirty && !imageTab && !interactionLocked ? '' : ' is-disabled');
             saveBtn.textContent = imageTab ? 'View' : (pane.dirty ? 'Save' : 'Saved');
             saveBtn.title = imageTab
                 ? 'Image preview is read-only in this version'
-                : 'Save this file';
+                : interactionLocked
+                    ? 'Resolve files changed on disk before saving'
+                    : 'Save this file';
             saveBtn.addEventListener('click', () => {
-                if (imageTab || !pane.dirty) {
+                if (imageTab || !pane.dirty || interactionLocked) {
                     return;
                 }
 
@@ -429,7 +481,11 @@
             filePath.title = pane.path;
 
             const state = document.createElement('div');
-            state.className = 'difference-pane-state' + (!imageTab && pane.dirty ? ' is-dirty' : '');
+            state.className = 'difference-pane-state' + (
+                this.hasPaneDiskConflict(pane)
+                    ? ' is-warning'
+                    : (!imageTab && pane.dirty ? ' is-dirty' : '')
+            );
             state.textContent = this.getPaneStateText(tab, pane);
 
             header.addEventListener('click', () => {
@@ -446,6 +502,225 @@
             header.appendChild(state);
             this.headerElements[paneIndex] = header;
             return header;
+        }
+
+        createDiskSnapshot(filePath = '', exists = false, size = null, mtimeMs = null) {
+            return {
+                path: filePath,
+                exists: Boolean(exists),
+                size: Number.isFinite(size) ? size : null,
+                mtimeMs: Number.isFinite(mtimeMs) ? mtimeMs : null
+            };
+        }
+
+        extractDiskSnapshot(result, filePath = '') {
+            return this.createDiskSnapshot(
+                filePath || result?.path || '',
+                Boolean(result?.exists),
+                result?.size,
+                result?.mtimeMs
+            );
+        }
+
+        diskSnapshotsEqual(left, right) {
+            const leftExists = Boolean(left?.exists);
+            const rightExists = Boolean(right?.exists);
+
+            if (leftExists !== rightExists) {
+                return false;
+            }
+
+            if (!leftExists && !rightExists) {
+                return true;
+            }
+
+            return (
+                Number(left?.size ?? -1) === Number(right?.size ?? -1) &&
+                Number(left?.mtimeMs ?? -1) === Number(right?.mtimeMs ?? -1)
+            );
+        }
+
+        getPaneConflictKey(tab, paneIndex) {
+            return `${tab?.id || 'tab'}::${paneIndex}`;
+        }
+
+        hasPaneDiskConflict(pane) {
+            return Boolean(pane?.diskChange);
+        }
+
+        tabHasUnresolvedDiskChanges(tab) {
+            return Boolean(tab?.panes?.some((pane) => this.hasPaneDiskConflict(pane)));
+        }
+
+        hasAnyUnresolvedDiskChanges() {
+            return this.tabs.some((tab) => this.tabHasUnresolvedDiskChanges(tab));
+        }
+
+        getDiskConflictEntries(includeAllTabs = true) {
+            const entries = [];
+
+            this.tabs.forEach((tab) => {
+                if (!includeAllTabs && tab.id !== this.activeTabId) {
+                    return;
+                }
+
+                tab.panes.forEach((pane, paneIndex) => {
+                    if (!this.hasPaneDiskConflict(pane)) {
+                        return;
+                    }
+
+                    entries.push({
+                        key: this.getPaneConflictKey(tab, paneIndex),
+                        tab,
+                        pane,
+                        paneIndex
+                    });
+                });
+            });
+
+            return entries;
+        }
+
+        queueDiskChangeNotice(items) {
+            if (!Array.isArray(items) || !items.length) {
+                return;
+            }
+
+            const knownKeys = new Set(this.pendingDiskChangeNoticeItems.map((item) => item.key));
+
+            items.forEach((item) => {
+                if (!item || knownKeys.has(item.key)) {
+                    return;
+                }
+
+                knownKeys.add(item.key);
+                this.pendingDiskChangeNoticeItems.push(item);
+            });
+
+            this.diskChangeNoticeDirty = true;
+            if (this.isOpen()) {
+                this.showDiskChangeNotice();
+            }
+        }
+
+        refreshDiskChangeNoticeList() {
+            if (!this.diskChangeNoticeListEl) {
+                return;
+            }
+
+            this.diskChangeNoticeListEl.innerHTML = '';
+            const unresolvedEntries = this.getDiskConflictEntries(true);
+
+            unresolvedEntries.forEach((entry) => {
+                const item = document.createElement('div');
+                item.className = 'difference-disk-notice-item';
+
+                const title = document.createElement('div');
+                title.className = 'difference-disk-notice-item-title';
+                title.textContent = `${entry.tab.relativePath} • ${entry.pane.label}`;
+
+                const pathEl = document.createElement('div');
+                pathEl.className = 'difference-disk-notice-item-path';
+                pathEl.textContent = entry.pane.path;
+
+                item.appendChild(title);
+                item.appendChild(pathEl);
+                this.diskChangeNoticeListEl.appendChild(item);
+            });
+
+            this.diskChangeNoticeDirty = false;
+        }
+
+        showDiskChangeNotice(force = false) {
+            if (!this.diskChangeNoticeEl) {
+                return;
+            }
+
+            if (!force && !this.hasAnyUnresolvedDiskChanges() && !this.pendingDiskChangeNoticeItems.length) {
+                this.hideDiskChangeNotice();
+                return;
+            }
+
+            if (this.diskChangeNoticeDirty || force) {
+                this.refreshDiskChangeNoticeList();
+            }
+
+            this.diskChangeNoticeOpen = true;
+            this.diskChangeNoticeEl.hidden = false;
+            this.pendingDiskChangeNoticeItems = [];
+        }
+
+        hideDiskChangeNotice() {
+            if (!this.diskChangeNoticeEl) {
+                return;
+            }
+
+            this.diskChangeNoticeOpen = false;
+            this.diskChangeNoticeEl.hidden = true;
+        }
+
+        reviewDiskChanges() {
+            const unresolvedEntries = this.getDiskConflictEntries(true);
+
+            if (!unresolvedEntries.length) {
+                this.hideDiskChangeNotice();
+                return;
+            }
+
+            const activeTab = this.getActiveTab();
+            const targetEntry = (activeTab
+                ? unresolvedEntries.find((entry) => entry.tab.id === activeTab.id)
+                : null) || unresolvedEntries[0];
+
+            if (!targetEntry) {
+                this.hideDiskChangeNotice();
+                return;
+            }
+
+            targetEntry.tab.focusPaneIndex = targetEntry.paneIndex;
+
+            if (this.activeTabId !== targetEntry.tab.id) {
+                this.activeTabId = targetEntry.tab.id;
+                this.persistTabs();
+            }
+
+            this.hideDiskChangeNotice();
+            this.render();
+            this.setStatus('Reviewing files changed on disk.', true);
+        }
+
+        clearPaneDiskConflict(tab, paneIndex) {
+            const pane = tab?.panes?.[paneIndex];
+            if (!pane) {
+                return;
+            }
+
+            pane.diskChange = null;
+            this.pendingDiskChangeNoticeItems = this.pendingDiskChangeNoticeItems
+                .filter((item) => item.key !== this.getPaneConflictKey(tab, paneIndex));
+
+            if (!this.hasAnyUnresolvedDiskChanges()) {
+                this.hideDiskChangeNotice();
+            } else {
+                this.diskChangeNoticeDirty = true;
+                if (this.diskChangeNoticeOpen) {
+                    this.refreshDiskChangeNoticeList();
+                }
+            }
+        }
+
+        isActiveTabInteractionLocked() {
+            return this.tabHasUnresolvedDiskChanges(this.getActiveTab());
+        }
+
+        ensureWritableActiveTab(actionLabel = 'continue') {
+            if (!this.isActiveTabInteractionLocked()) {
+                return true;
+            }
+
+            this.showDiskChangeNotice(true);
+            this.setStatus('Resolve files changed on disk before you ' + actionLabel + '.', true);
+            return false;
         }
 
         setSelection(tab, paneIndex, startRow, endRow, anchorRow = startRow, activeRow = endRow) {
@@ -736,6 +1011,10 @@
                 return;
             }
 
+            if (!this.ensureWritableActiveTab('edit this file')) {
+                return;
+            }
+
             if (this.inlineEditor?.tabId === tab.id && this.inlineEditor.paneIndex === paneIndex && this.inlineEditor.rowIndex === rowIndex) {
                 this.inlineEditor.textarea?.focus();
                 this.inlineEditor.textarea?.select();
@@ -935,6 +1214,8 @@
                     label: pane.label,
                     exists: Boolean(result.exists),
                     savedExists: Boolean(result.exists),
+                    diskSnapshot: this.extractDiskSnapshot(result, pane.path),
+                    diskChange: null,
                     error: result.error || '',
                     content: textContent,
                     savedContent: textContent,
@@ -1084,6 +1365,10 @@
                 return;
             }
 
+            if (!this.ensureWritableActiveTab('use undo')) {
+                return;
+            }
+
             const history = this.ensureTabHistory(tab);
             if (!history.undoStack.length) {
                 this.setStatus('Nothing to undo.');
@@ -1105,6 +1390,10 @@
             this.finishInlineEdit({ commit: true });
             const tab = this.getActiveTab();
             if (!tab) {
+                return;
+            }
+
+            if (!this.ensureWritableActiveTab('use redo')) {
                 return;
             }
 
@@ -1181,6 +1470,11 @@
 
             this.modal.classList.add('is-open');
             document.body.style.overflow = 'hidden';
+            this.scheduleDiskChangeCheck();
+
+            if (this.hasAnyUnresolvedDiskChanges()) {
+                this.showDiskChangeNotice(true);
+            }
         }
 
         close() {
@@ -1193,6 +1487,7 @@
 
             this.modal.classList.remove('is-open');
             document.body.style.overflow = '';
+            this.hideDiskChangeNotice();
 
             if (this.compareResults) {
                 this.compareResults.classList.remove('is-suspended');
@@ -1253,10 +1548,20 @@
                 this.inlineEditor = null;
             }
 
+            this.pendingDiskChangeNoticeItems = this.pendingDiskChangeNoticeItems
+                .filter((item) => item.tab.id !== tabId);
+
             this.tabs = this.tabs.filter(item => item.id !== tabId);
 
             if (this.activeTabId === tabId) {
                 this.activeTabId = this.tabs[0]?.id || null;
+            }
+
+            if (!this.hasAnyUnresolvedDiskChanges()) {
+                this.hideDiskChangeNotice();
+            } else if (this.diskChangeNoticeOpen) {
+                this.diskChangeNoticeDirty = true;
+                this.refreshDiskChangeNoticeList();
             }
 
             this.persistTabs();
@@ -1279,13 +1584,27 @@
 
             const refreshed = await this.loadTab(tab.descriptor, tab.id);
             Object.assign(tab, refreshed);
+            this.pendingDiskChangeNoticeItems = this.pendingDiskChangeNoticeItems
+                .filter((item) => item.tab.id !== tab.id);
             this.pendingRowReveal = null;
+            this.diskChangeNoticeDirty = true;
+            if (this.diskChangeNoticeOpen && this.hasAnyUnresolvedDiskChanges()) {
+                this.refreshDiskChangeNoticeList();
+            } else if (!this.hasAnyUnresolvedDiskChanges()) {
+                this.hideDiskChangeNotice();
+            }
             this.setStatus('Reloaded ' + tab.relativePath + ' from disk.');
             this.render();
         }
 
         async savePane(tab, paneIndex) {
             this.finishInlineEdit({ commit: true });
+            if (this.tabHasUnresolvedDiskChanges(tab)) {
+                this.showDiskChangeNotice(true);
+                this.setStatus('Resolve files changed on disk before saving.', true);
+                return;
+            }
+
             if (this.isImageTab(tab)) {
                 this.setStatus('Image comparison is preview-only in this version.');
                 return;
@@ -1296,7 +1615,7 @@
                 return;
             }
 
-            await this.api.writeFile({
+            const result = await this.api.writeFile({
                 path: pane.path,
                 content: pane.content
             });
@@ -1304,6 +1623,8 @@
             pane.exists = true;
             pane.savedExists = true;
             pane.savedContent = pane.content;
+            pane.diskSnapshot = this.extractDiskSnapshot(result?.diskSnapshot, pane.path);
+            pane.diskChange = null;
             this.syncTabDirtyState(tab);
             window.DifferenceEngine.rebuildTab(tab);
             this.persistTabs();
@@ -1312,6 +1633,12 @@
 
         async saveAllTabs() {
             this.finishInlineEdit({ commit: true });
+            if (this.hasAnyUnresolvedDiskChanges()) {
+                this.showDiskChangeNotice(true);
+                this.setStatus('Resolve files changed on disk before using Save All.', true);
+                return;
+            }
+
             const dirtyPanes = [];
 
             this.tabs.forEach(tab => {
@@ -1332,6 +1659,167 @@
             }
 
             this.setStatus('Saved ' + dirtyPanes.length + ' modified file(s).', true);
+            this.render();
+        }
+
+        scheduleDiskChangeCheck() {
+            if (this.pendingDiskChangeCheckTimer) {
+                clearTimeout(this.pendingDiskChangeCheckTimer);
+                this.pendingDiskChangeCheckTimer = 0;
+            }
+
+            this.pendingDiskChangeCheckTimer = setTimeout(() => {
+                this.pendingDiskChangeCheckTimer = 0;
+                this.checkOpenTabsForDiskChanges().catch((err) => {
+                    console.warn('Failed to check open tabs for disk changes:', err);
+                });
+            }, 120);
+        }
+
+        async checkOpenTabsForDiskChanges() {
+            if (!this.tabs.length || !this.api.getFileStats) {
+                return;
+            }
+
+            const paths = [];
+            const seenPaths = new Set();
+            this.tabs.forEach((tab) => {
+                tab.panes.forEach((pane) => {
+                    const filePath = String(pane?.path || '').trim();
+                    if (!filePath || seenPaths.has(filePath)) {
+                        return;
+                    }
+
+                    seenPaths.add(filePath);
+                    paths.push(filePath);
+                });
+            });
+
+            if (!paths.length) {
+                return;
+            }
+
+            const stats = await this.api.getFileStats(paths);
+            const statsByPath = new Map();
+            (Array.isArray(stats) ? stats : []).forEach((item) => {
+                statsByPath.set(String(item?.path || ''), this.extractDiskSnapshot(item, item?.path || ''));
+            });
+
+            const newNoticeItems = [];
+            const affectedActiveTab = Boolean(
+                this.inlineEditor &&
+                this.tabs.some((tab) => tab.id === this.inlineEditor.tabId)
+            );
+            let shouldRender = false;
+
+            this.tabs.forEach((tab) => {
+                tab.panes.forEach((pane, paneIndex) => {
+                    const latestSnapshot = statsByPath.get(String(pane.path || '')) || this.createDiskSnapshot(pane.path, false);
+
+                    if (!this.diskSnapshotsEqual(pane.diskSnapshot, latestSnapshot)) {
+                        if (!this.hasPaneDiskConflict(pane)) {
+                            pane.diskChange = {
+                                detectedAt: Date.now(),
+                                diskSnapshot: latestSnapshot
+                            };
+                            newNoticeItems.push({
+                                key: this.getPaneConflictKey(tab, paneIndex),
+                                tab,
+                                pane,
+                                paneIndex
+                            });
+                            if (tab.id === this.activeTabId) {
+                                shouldRender = true;
+                            }
+                        } else if (!this.diskSnapshotsEqual(pane.diskChange.diskSnapshot, latestSnapshot)) {
+                            pane.diskChange.diskSnapshot = latestSnapshot;
+                            shouldRender = true;
+                        }
+
+                        if (this.inlineEditor?.tabId === tab.id && this.inlineEditor.paneIndex === paneIndex) {
+                            this.finishInlineEdit({ commit: true });
+                        }
+                    }
+                });
+            });
+
+            if (newNoticeItems.length) {
+                this.queueDiskChangeNotice(newNoticeItems);
+                this.renderTabs();
+                this.updateToolbarState();
+            }
+
+            if (shouldRender) {
+                this.render();
+                return;
+            }
+
+            if (affectedActiveTab) {
+                this.refreshSelectionVisuals();
+            }
+        }
+
+        async reloadPaneFromDisk(tab, paneIndex) {
+            const pane = tab?.panes?.[paneIndex];
+            if (!pane) {
+                return;
+            }
+
+            this.finishInlineEdit({ commit: true });
+
+            const [result] = await this.api.readFiles([pane.path]);
+            const mode = this.isImageTab(tab) ? 'image' : 'text';
+            const nextExists = Boolean(result?.exists);
+            const nextContent = mode === 'image' ? '' : (result?.content || '');
+
+            tab.panes[paneIndex] = {
+                ...pane,
+                exists: nextExists,
+                savedExists: nextExists,
+                diskSnapshot: this.extractDiskSnapshot(result, pane.path),
+                diskChange: null,
+                error: result?.error || '',
+                content: nextContent,
+                savedContent: nextContent,
+                mimeType: mode === 'image' ? (result?.mimeType || this.getMimeTypeForFilePath(pane.path)) : '',
+                imageDataUrl: mode === 'image' ? (result?.dataUrl || '') : '',
+                lineHints: null
+            };
+
+            tab.selection = null;
+            tab.history = this.createTabHistory();
+            this.syncTabDirtyState(tab);
+
+            if (this.isImageTab(tab)) {
+                tab.rows = [];
+                tab.hunks = [];
+            } else {
+                window.DifferenceEngine.rebuildTab(tab);
+            }
+
+            this.clearPaneDiskConflict(tab, paneIndex);
+            this.persistTabs();
+            this.setStatus('Reloaded ' + pane.label + ' from disk.', true);
+            this.render();
+        }
+
+        async keepPaneCurrentVersion(tab, paneIndex) {
+            const pane = tab?.panes?.[paneIndex];
+            if (!pane || !pane.diskChange) {
+                return;
+            }
+
+            this.finishInlineEdit({ commit: true });
+
+            const [result] = await this.api.readFiles([pane.path]);
+            pane.savedExists = Boolean(result?.exists);
+            pane.savedContent = this.isImageTab(tab) ? '' : (result?.content || '');
+            pane.diskSnapshot = this.extractDiskSnapshot(result, pane.path);
+            pane.error = result?.error || '';
+            this.clearPaneDiskConflict(tab, paneIndex);
+            this.syncTabDirtyState(tab);
+            this.persistTabs();
+            this.setStatus('Kept the current viewer version for ' + pane.label + '.', true);
             this.render();
         }
 
@@ -1377,6 +1865,13 @@
                     dirtyBadge.className = 'difference-badge is-dirty';
                     dirtyBadge.textContent = 'Unsaved';
                     badges.appendChild(dirtyBadge);
+                }
+
+                if (this.tabHasUnresolvedDiskChanges(tab)) {
+                    const diskBadge = document.createElement('span');
+                    diskBadge.className = 'difference-badge is-warning';
+                    diskBadge.textContent = 'Changed on disk';
+                    badges.appendChild(diskBadge);
                 }
 
                 meta.appendChild(title);
@@ -1990,6 +2485,101 @@
             return paneEl;
         }
 
+        getDiskChangeOverlayTitle(tab, pane) {
+            if (!this.isImageTab(tab) && pane.dirty) {
+                return 'This file changed on disk and also has unsaved changes here.';
+            }
+
+            return 'This file changed on disk.';
+        }
+
+        getDiskChangeOverlayDetail(tab, pane) {
+            if (!this.isImageTab(tab) && pane.dirty) {
+                return 'Reloading will discard the edits currently held in Difference. Keeping the current version will preserve the in-app content and mark it as newer than the disk copy.';
+            }
+
+            if (this.isImageTab(tab)) {
+                return 'Reload to show the latest image from disk, or keep the current preview snapshot for now.';
+            }
+
+            return 'Reload to refresh from disk, or keep the current version and continue from the snapshot that is already open here.';
+        }
+
+        createConflictOverlayCell(tab, pane, paneIndex) {
+            const cell = document.createElement('div');
+            cell.className = 'difference-conflict-overlay-cell';
+            cell.style.minWidth = this.paneMinWidth + 'px';
+            cell.style.maxWidth = this.paneMaxWidth + 'px';
+
+            if (!this.hasPaneDiskConflict(pane)) {
+                return cell;
+            }
+
+            const overlay = document.createElement('div');
+            overlay.className = 'difference-conflict-overlay';
+
+            const card = document.createElement('div');
+            card.className = 'difference-conflict-card';
+
+            const title = document.createElement('div');
+            title.className = 'difference-conflict-title';
+            title.textContent = this.getDiskChangeOverlayTitle(tab, pane);
+
+            const detail = document.createElement('div');
+            detail.className = 'difference-conflict-detail';
+            detail.textContent = this.getDiskChangeOverlayDetail(tab, pane);
+
+            const actions = document.createElement('div');
+            actions.className = 'difference-conflict-actions';
+
+            const reloadBtn = this.createActionButton({
+                className: 'difference-header-btn',
+                label: 'Reload from disk',
+                title: 'Reload this file from disk and clear the changed-on-disk warning',
+                onClick: () => {
+                    this.reloadPaneFromDisk(tab, paneIndex).catch((err) => {
+                        this.setStatus('Reload failed: ' + err.message);
+                    });
+                }
+            });
+
+            const keepBtn = this.createActionButton({
+                className: 'difference-header-btn',
+                label: 'Keep current version',
+                title: 'Keep the version currently open in Difference and treat the disk copy as outdated',
+                onClick: () => {
+                    this.keepPaneCurrentVersion(tab, paneIndex).catch((err) => {
+                        this.setStatus('Keep current version failed: ' + err.message);
+                    });
+                }
+            });
+
+            actions.appendChild(reloadBtn);
+            actions.appendChild(keepBtn);
+            card.appendChild(title);
+            card.appendChild(detail);
+            card.appendChild(actions);
+            overlay.appendChild(card);
+            cell.appendChild(overlay);
+            return cell;
+        }
+
+        createConflictOverlayLayer(tab, templateColumns) {
+            if (!this.tabHasUnresolvedDiskChanges(tab)) {
+                return null;
+            }
+
+            const layer = document.createElement('div');
+            layer.className = 'difference-conflict-layer';
+            layer.style.gridTemplateColumns = templateColumns;
+
+            tab.panes.forEach((pane, paneIndex) => {
+                layer.appendChild(this.createConflictOverlayCell(tab, pane, paneIndex));
+            });
+
+            return layer;
+        }
+
         renderImageTab(tab, previousTop, previousLeft, shouldResetViewerOpenScroll) {
             const compare = document.createElement('div');
             compare.className = 'difference-compare difference-compare--image';
@@ -2021,6 +2611,10 @@
             });
 
             grid.appendChild(panesRow);
+            const conflictLayer = this.createConflictOverlayLayer(tab, templateColumns);
+            if (conflictLayer) {
+                grid.appendChild(conflictLayer);
+            }
             gridScroll.appendChild(grid);
             compare.appendChild(gridScroll);
             this.bodyEl.appendChild(compare);
@@ -2173,6 +2767,11 @@
                 this.scrollbarRowEl = scrollbarRow;
             }
 
+            const conflictLayer = this.createConflictOverlayLayer(tab, templateColumns);
+            if (conflictLayer) {
+                grid.appendChild(conflictLayer);
+            }
+
             gridScroll.appendChild(grid);
             compare.appendChild(gridScroll);
 
@@ -2316,6 +2915,7 @@
 
         updateStatusForTab(tab) {
             const activePane = tab.panes[tab.focusPaneIndex];
+            const conflictCount = tab.panes.filter((pane) => this.hasPaneDiskConflict(pane)).length;
             if (this.isImageTab(tab)) {
                 const availableCount = tab.panes.filter((pane) => pane.exists && !pane.error).length;
                 const missingCount = tab.panes.filter((pane) => !pane.exists).length;
@@ -2333,6 +2933,10 @@
                     summaryParts.push(`${errorCount} error${errorCount === 1 ? '' : 's'}`);
                 }
 
+                if (conflictCount) {
+                    summaryParts.push(`${conflictCount} changed on disk`);
+                }
+
                 this.setStatus(summaryParts.join(' | '));
                 return;
             }
@@ -2342,12 +2946,18 @@
                 : 'Selection: none';
             const hunks = tab.hunks.length + ' change hunk' + (tab.hunks.length === 1 ? '' : 's');
             const dirtyCount = tab.panes.filter(pane => pane.dirty).length;
-            this.setStatus(
-                'Active: ' + (activePane?.label || 'n/a') + ' | ' +
-                selection + ' | ' +
-                hunks + ' | ' +
+            const statusParts = [
+                'Active: ' + (activePane?.label || 'n/a'),
+                selection,
+                hunks,
                 dirtyCount + ' dirty file' + (dirtyCount === 1 ? '' : 's')
-            );
+            ];
+
+            if (conflictCount) {
+                statusParts.push(conflictCount + ' changed on disk');
+            }
+
+            this.setStatus(statusParts.join(' | '));
         }
 
         updateToolbarState() {
@@ -2355,17 +2965,19 @@
             const hasSelection = Boolean(tab?.selection);
             const dirtyTabs = this.tabs.some(item => item.panes.some(pane => pane.dirty));
             const imageTab = this.isImageTab(tab);
+            const lockedTab = this.tabHasUnresolvedDiskChanges(tab);
+            const anyLockedTabs = this.hasAnyUnresolvedDiskChanges();
 
-            this.toggleDisabled(this.saveAllBtn, !dirtyTabs);
+            this.toggleDisabled(this.saveAllBtn, !dirtyTabs || anyLockedTabs);
             this.toggleDisabled(this.reloadBtn, !tab);
             this.toggleDisabled(this.prevHunkBtn, !tab || imageTab || !tab.hunks.length);
             this.toggleDisabled(this.nextHunkBtn, !tab || imageTab || !tab.hunks.length);
-            this.toggleDisabled(this.copySelectionLeftBtn, imageTab || !this.canCopySelectionToNeighbor(-1));
-            this.toggleDisabled(this.copySelectionRightBtn, imageTab || !this.canCopySelectionToNeighbor(1));
-            this.toggleDisabled(this.copyLeftIntoSelectionBtn, imageTab || !this.canCopyNeighborIntoSelection(-1));
-            this.toggleDisabled(this.copyRightIntoSelectionBtn, imageTab || !this.canCopyNeighborIntoSelection(1));
-            this.toggleDisabled(this.mergeLeftRightBtn, imageTab || !hasSelection || !tab || tab.focusPaneIndex <= 0 || tab.focusPaneIndex >= tab.panes.length - 1);
-            this.toggleDisabled(this.mergeRightLeftBtn, imageTab || !hasSelection || !tab || tab.focusPaneIndex <= 0 || tab.focusPaneIndex >= tab.panes.length - 1);
+            this.toggleDisabled(this.copySelectionLeftBtn, imageTab || lockedTab || !this.canCopySelectionToNeighbor(-1));
+            this.toggleDisabled(this.copySelectionRightBtn, imageTab || lockedTab || !this.canCopySelectionToNeighbor(1));
+            this.toggleDisabled(this.copyLeftIntoSelectionBtn, imageTab || lockedTab || !this.canCopyNeighborIntoSelection(-1));
+            this.toggleDisabled(this.copyRightIntoSelectionBtn, imageTab || lockedTab || !this.canCopyNeighborIntoSelection(1));
+            this.toggleDisabled(this.mergeLeftRightBtn, imageTab || lockedTab || !hasSelection || !tab || tab.focusPaneIndex <= 0 || tab.focusPaneIndex >= tab.panes.length - 1);
+            this.toggleDisabled(this.mergeRightLeftBtn, imageTab || lockedTab || !hasSelection || !tab || tab.focusPaneIndex <= 0 || tab.focusPaneIndex >= tab.panes.length - 1);
         }
 
         toggleDisabled(element, disabled) {
@@ -2457,6 +3069,10 @@
                 return false;
             }
 
+            if (this.tabHasUnresolvedDiskChanges(selection.tab)) {
+                return false;
+            }
+
             const targetPaneIndex = selection.paneIndex + direction;
             if (targetPaneIndex < 0 || targetPaneIndex >= selection.tab.panes.length) {
                 return false;
@@ -2471,6 +3087,10 @@
                 return false;
             }
 
+            if (this.tabHasUnresolvedDiskChanges(selection.tab)) {
+                return false;
+            }
+
             const sourcePaneIndex = selection.paneIndex + direction;
             if (sourcePaneIndex < 0 || sourcePaneIndex >= selection.tab.panes.length) {
                 return false;
@@ -2482,6 +3102,10 @@
         canDeleteSelection() {
             const selection = this.getSelection();
             if (!selection) {
+                return false;
+            }
+
+            if (this.tabHasUnresolvedDiskChanges(selection.tab)) {
                 return false;
             }
 
@@ -2518,6 +3142,12 @@
         }
 
         applyReplacement(tab, paneIndex, startRow, endRow, replacementLines, description, options = {}) {
+            if (this.tabHasUnresolvedDiskChanges(tab)) {
+                this.showDiskChangeNotice(true);
+                this.setStatus('Resolve files changed on disk before editing this comparison.', true);
+                return;
+            }
+
             const wasDirty = tab.panes.some(pane => pane.dirty);
             this.pushUndoSnapshot(tab);
             const currentPane = tab.panes[paneIndex];
@@ -2902,6 +3532,14 @@
 
         handleKeyDown(event) {
             if (!this.isOpen()) {
+                return;
+            }
+
+            if (this.diskChangeNoticeOpen) {
+                if (event.key === 'Escape') {
+                    event.preventDefault();
+                    this.hideDiskChangeNotice();
+                }
                 return;
             }
 

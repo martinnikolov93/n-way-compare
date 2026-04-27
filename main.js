@@ -969,21 +969,55 @@ ipcMain.handle('open-diffuse', async (e, files) => {
 
 });
 
+function getFileDiskSnapshot(filePath) {
+    try {
+        if (!filePath || !fs.existsSync(filePath)) {
+            return {
+                path: filePath,
+                exists: false,
+                size: null,
+                mtimeMs: null
+            };
+        }
+
+        const stat = fs.statSync(filePath);
+
+        return {
+            path: filePath,
+            exists: stat.isFile(),
+            size: stat.isFile() ? stat.size : null,
+            mtimeMs: stat.isFile() ? stat.mtimeMs : null
+        };
+    } catch (err) {
+        return {
+            path: filePath,
+            exists: false,
+            size: null,
+            mtimeMs: null,
+            error: err.message
+        };
+    }
+}
+
 ipcMain.handle('read-files', async (e, filePaths) => {
     return filePaths.map(filePath => {
         const imageFile = DifferenceFileTypes.isImageFilePath(filePath);
+        const diskSnapshot = getFileDiskSnapshot(filePath);
 
         try {
-            if (!filePath || !fs.existsSync(filePath)) {
+            if (!diskSnapshot.exists) {
                 return {
                     path: filePath,
                     exists: false,
                     kind: imageFile ? 'image' : 'text',
                     content: '',
                     dataUrl: '',
+                    size: diskSnapshot.size,
+                    mtimeMs: diskSnapshot.mtimeMs,
                     mimeType: imageFile
                         ? DifferenceFileTypes.getMimeTypeForFilePath(filePath)
-                        : ''
+                        : '',
+                    error: diskSnapshot.error || ''
                 };
             }
 
@@ -997,6 +1031,8 @@ ipcMain.handle('read-files', async (e, filePaths) => {
                     kind: 'image',
                     content: '',
                     dataUrl: `data:${mimeType};base64,${buffer.toString('base64')}`,
+                    size: diskSnapshot.size,
+                    mtimeMs: diskSnapshot.mtimeMs,
                     mimeType
                 };
             }
@@ -1005,6 +1041,8 @@ ipcMain.handle('read-files', async (e, filePaths) => {
                 path: filePath,
                 exists: true,
                 kind: 'text',
+                size: diskSnapshot.size,
+                mtimeMs: diskSnapshot.mtimeMs,
                 content: fs.readFileSync(filePath, 'utf8')
             };
         } catch (err) {
@@ -1014,6 +1052,8 @@ ipcMain.handle('read-files', async (e, filePaths) => {
                 kind: imageFile ? 'image' : 'text',
                 content: '',
                 dataUrl: '',
+                size: diskSnapshot.size,
+                mtimeMs: diskSnapshot.mtimeMs,
                 mimeType: imageFile
                     ? DifferenceFileTypes.getMimeTypeForFilePath(filePath)
                     : '',
@@ -1021,6 +1061,10 @@ ipcMain.handle('read-files', async (e, filePaths) => {
             };
         }
     });
+});
+
+ipcMain.handle('get-file-stats', async (e, filePaths) => {
+    return (Array.isArray(filePaths) ? filePaths : [filePaths]).map(filePath => getFileDiskSnapshot(filePath));
 });
 
 ipcMain.handle('write-file', async (e, { path: filePath, content }) => {
@@ -1034,7 +1078,8 @@ ipcMain.handle('write-file', async (e, { path: filePath, content }) => {
 
         return {
             success: true,
-            path: filePath
+            path: filePath,
+            diskSnapshot: getFileDiskSnapshot(filePath)
         };
     } catch (err) {
         console.error('Write error:', err);
