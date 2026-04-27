@@ -1,21 +1,36 @@
 # N-Way Compare
 
-N-Way Compare is a desktop tool for comparing the same project, or code folder across multiple target directories. It is designed for workflows where you need to inspect differences, copy files or folders between targets, delete stale items, and review file-level changes without losing context.
+N-Way Compare is a desktop app for comparing the same project across multiple folders at once.
+
+It is built for workflows where you want to:
+- compare several project variants side by side
+- spot missing or different files quickly
+- open a file diff across all targets
+- copy files or folders from one target to others
+- delete stale files or folders safely
 
 ## Main Page
 
-The main page is the workspace comparison view. It compares two or more root folders and renders a sticky comparison tree with per-target status and actions.
+The main page is where you choose folders, scan them, and work through the results.
+
+### Typical Flow
+
+1. Add the folders you want to compare.
+2. Optionally add exclude patterns for paths you do not care about.
+3. Click `Scan`.
+4. Review the comparison tree.
+5. Use `Difference` for file-level review, or use the global `Copy` and `Delete` actions for batch changes.
 
 ### Folder Setup
 
-Use the folder inputs at the top of the app to define the roots that participate in the comparison.
+Use the folder inputs at the top of the app to define which roots should participate in the comparison.
 
 | Control | What it does |
 | --- | --- |
 | Add Folder | Adds a new folder input and opens the folder picker. If the input already contains a path, the picker opens from that location when possible. |
 | Folder picker icon | Opens the folder picker for that specific input. |
 | Folder X button | Removes that folder input from the comparison. At least two folder inputs are kept available. |
-| Exclude files and folders | Skips matching relative paths during scan and folder watching. Use one pattern per line, such as `node_modules`, `dist`, or `*.log`. |
+| Exclude files and folders | Skips matching relative paths during scan and automatic refresh. Use one pattern per line, such as `node_modules`, `dist`, or `*.log`. |
 | Load Config | Loads a saved JSON config with folder paths, then starts a scan automatically. |
 | Save Config | Saves the current folder paths and exclusion patterns as a JSON config. |
 | Scan | Scans all configured folders and refreshes the comparison tree. |
@@ -23,15 +38,15 @@ Use the folder inputs at the top of the app to define the roots that participate
 
 ### Comparison Tree
 
-After a scan, the tree shows files and folders found across the configured roots.
+After a scan, the comparison tree shows the same relative file or folder across all selected targets, so you can quickly see what is present, missing, or different.
 
 | UI element | Meaning |
 | --- | --- |
-| Left sticky path column | Shows the file or folder name, icon, relative path, and diff status while you scroll horizontally. |
-| Target columns | Show whether each file or folder exists in each configured root. |
-| Right sticky actions column | Keeps actions visible while you scroll horizontally. |
-| Checkmark badge | The item is synced in the path/title column. |
-| X badge | The item differs in the path/title column. |
+| Name column | Shows the file or folder name, icon, relative path, and overall status. |
+| Target columns | Show the state of that item in each selected folder. |
+| Actions column | Keeps the row actions available while you move around the tree. |
+| Checkmark badge | This item is in sync. |
+| X badge | This item differs somewhere across the targets. |
 | SYNCED | The item is present and equivalent for that target. |
 | DIFF | The item exists but differs from at least one other target. |
 | MISSING | The item does not exist in that target. |
@@ -52,43 +67,43 @@ After a scan, the tree shows files and folders found across the configured roots
 
 ### File Actions
 
-Each file row can expose these actions in the right sticky action column.
+Each file row can expose these actions in the actions column.
 
 | Action | What it does |
 | --- | --- |
 | Diffuse | Opens the selected existing files in the external Diffuse tool. Requires at least two existing files. |
 | Difference | Opens the built-in Difference Viewer for that file across all configured targets. |
 
-Use the radio button in a target column to choose the source file. Use checkboxes to choose target locations, then use the global `Copy` or `Delete` buttons in the tree toolbar.
+To copy a file, choose one source with the radio button, check the targets you want to update, then use the global `Copy` button in the tree toolbar.
+
+To delete, check the target locations you want to remove and use the global `Delete` button.
 
 ### Folder Actions
 
-Folder rows participate in the same global batch actions.
+Folder rows work the same way as file rows.
 
 | Action | What it does |
 | --- | --- |
 | Copy | Copies selected source folders into checked target folder locations. |
 | Delete | Deletes checked existing folders after confirmation. |
 
-Use the radio button to choose the source folder. Use checkboxes to choose target folder locations.
+If you select a parent folder, nested child selections under it are skipped automatically when the batch action runs.
 
-### Main Page Undo and Redo
+### Undo and Redo
 
-Main-page `Copy` and `Delete` actions are stored in an in-memory action history. A batch copy or delete is stored as one undo step. Each action keeps temporary snapshots of the affected target paths, so `Undo` can restore deleted items or previous overwritten target content, and `Redo` can reapply the same result.
+Main-page `Copy` and `Delete` actions can be undone and redone during the current app session.
 
-Use the toolbar buttons, `Ctrl+Z`, `Ctrl+Y`, or `Ctrl+Shift+Z` while focus is not inside an input field. History is kept for the current app session and is cleared when the app closes.
+Use the toolbar buttons, `Ctrl+Z`, `Ctrl+Y`, or `Ctrl+Shift+Z` while focus is not inside an input field.
 
-Before a global batch action runs, the app shows a confirmation popup with the planned file and folder operations. Nested selections are skipped when a selected parent folder already covers them.
+Before a batch action runs, the app shows a confirmation popup so you can review what will happen.
 
-### Scanning Behavior
+### Automatic Refresh
 
-The app watches the configured folders for changes. When files or folders change, it refreshes the comparison tree while preserving vertical and horizontal scroll position. Incremental updates are used where possible so small changes do not require a full rerender.
-
-Exclusion patterns are applied before entries are added to the comparison map. A plain name such as `node_modules` matches any path segment with that name, `*.log` matches file or folder names by basename, and path-like patterns such as `src/generated` skip that relative subtree.
+After the first scan, the app keeps watching the selected folders. If something changes on disk, the comparison tree refreshes automatically and keeps your scroll position where possible.
 
 ### Exclusion Patterns
 
-Use the `Exclude files and folders` box to skip noisy or heavy paths. Put one pattern per line.
+Use the `Exclude files and folders` box to skip paths you do not want to compare or watch. Put one pattern per line.
 
 | Pattern type | Example | What it excludes |
 | --- | --- | --- |
@@ -98,64 +113,46 @@ Use the `Exclude files and folders` box to skip noisy or heavy paths. Put one pa
 | Relative subtree | `src/generated` | The `src/generated` subtree from every configured root. |
 | Relative glob subtree | `dist/**` | The `dist` folder and everything under it from every configured root. |
 
-Exclusions also apply to folder watching, so ignored paths do not trigger automatic rescans.
+These exclusions also apply to automatic refresh, so ignored paths do not trigger rescans.
 
 ## Difference Viewer
 
-The Difference Viewer is the built-in multi-pane file diff and merge tool. It opens from the `Difference` action on a file row.
+The Difference Viewer opens when you click `Difference` on a file row. It lets you compare the same file across all selected targets in one place.
 
-### Layout
+### What You Can Do Here
 
 | Area | What it does |
 | --- | --- |
-| Header | Shows the active comparison title, path/status, and global actions. |
-| Tabs | Each opened comparison is kept in its own tab. Switching tabs restores that tab's state. |
-| Toolbar | Provides change navigation, transfer/merge actions, and pane width controls. |
-| File panes | Show one file per target column with aligned rows and inline highlights. |
-| Quick diff scroller | The right overview bar shows where differences are located and lets you jump through the file. |
-| Status bar | Shows the current selection or operation status. |
+| Header | Shows the current file and the main actions for the viewer. |
+| Tabs | Keep multiple open comparisons available at the same time. |
+| Toolbar | Lets you jump between changes and move text between files. |
+| File panes | Show one version of the file per target folder. |
+| Quick diff scroller | Gives you a compact map of where the changes are. |
+| Status bar | Shows selection and action feedback. |
 
 ### Basic Usage
 
 Click a row to select it. Drag within a pane to select multiple rows. Shift-click extends the current selection inside the same pane.
 
-If the selected file is an image, the Difference Viewer switches into image preview mode automatically instead of the text diff grid. The current first version supports side-by-side preview for `png`, `jpg`, `jpeg`, `webp`, `gif`, `bmp`, `svg`, `ico`, and `avif`.
+Use the transfer and merge buttons to move selected text between neighboring panes.
 
-Image tabs are view-only in this version. They do not show inline diff markers, row selections, merge actions, or inline editing controls.
+Double-click a row to edit it inline. Press `Ctrl+Enter` to commit the edit, `Esc` to cancel it, or click away to commit. Press `Tab` inside the editor to insert four spaces.
 
-If an opened file changes on disk while its Difference tab is still alive, the viewer marks that pane as changed on disk, shows a review notice, and blocks edit/merge actions in that comparison until you choose either `Reload from disk` or `Keep current version`.
+Use `Save All` or `Ctrl+S` to write your changes to disk. Individual panes also show a `Save` button when that file has unsaved changes.
 
-## Regression Tests
+If the selected file is an image, the Difference Viewer switches into image preview mode automatically instead of text comparison. The current version supports side-by-side preview for `png`, `jpg`, `jpeg`, `webp`, `gif`, `bmp`, `svg`, `ico`, and `avif`.
 
-Run `npm test` to execute the diff regression suite.
-
-The current test set focuses on the file-comparison logic that has been most sensitive during development:
-
-| Covered scenario | Why it matters |
-| --- | --- |
-| Multi-pane inserted block between blank rows | Protects the classic “extra lines in one target only” alignment case using synthetic prose. |
-| First blank-line delete | Guards the selection and `Missing in this file` behavior after delete. |
-| Repeated blank-line delete | Protects stability when deleting from the same blank block more than once. |
-| Delete + move blank rows | Catches regressions where editing one block breaks an unrelated block above it. |
-| Blank lines around changed text | Prevents simple line changes from turning into extra missing rows. |
-| Numbered prose rows in two and four panes | Keeps `1:`, `2:` style text aligned by key as counts grow. |
-| Copy into existing target rows | Verifies replacement stays one-to-one instead of creating extra gaps. |
-| Copy blank runs into missing blocks | Protects blank-line transfers and merge actions. |
-| Inline prose and numeric highlights | Verifies only the changed words or digits are highlighted, not surrounding punctuation. |
-
-Double-click a row to edit it inline. Press `Ctrl+Enter` to commit the edit, `Esc` to cancel it, or click away to commit. Pressing `Tab` inside the editor inserts four spaces.
-
-Use `Save All` or `Ctrl+S` to write dirty files to disk. Individual panes also show a `Save` button when that file has unsaved changes.
+If an opened file changes on disk while its tab is still open, the viewer pauses editing for that comparison and asks you to review the changed files. You can then choose `Reload from disk` or `Keep current version`.
 
 ### Difference Viewer Buttons
 
 | Button | Shortcut | What it does |
 | --- | --- | --- |
 | Save All | `Ctrl+S` | Saves all modified files in all open tabs. |
-| Reload | None | Reloads the active tab from disk. |
+| Reload | None | Reloads the active comparison from disk. |
 | Close | `Esc` | Closes the Difference Viewer popup. |
-| Prev | `Alt+Up` | Jumps to the previous diff hunk. |
-| Next | `Alt+Down` | Jumps to the next diff hunk. |
+| Prev | `Alt+Up` | Jumps to the previous change. |
+| Next | `Alt+Down` | Jumps to the next change. |
 | Sel -> L | `Shift+Ctrl+Left` | Copies the current selection into the file on the left. |
 | Sel -> R | `Shift+Ctrl+Right` | Copies the current selection into the file on the right. |
 | L -> Sel | `Ctrl+Right` | Replaces the current selection with the aligned text from the left file. |
@@ -192,7 +189,7 @@ Use `Save All` or `Ctrl+S` to write dirty files to disk. Individual panes also s
 
 ### Quick Diff Scroller
 
-The overview bar on the right provides a compact map of the current file comparison.
+The overview bar on the right gives you a small map of the current file comparison.
 
 | Marker | Meaning |
 | --- | --- |
@@ -205,8 +202,22 @@ Click or drag inside the overview bar to jump through the file.
 
 ### Undo and Redo
 
-Undo and redo history is scoped per comparison tab. Switching tabs keeps each tab's own history. Closing a comparison tab removes its history.
+Undo and redo history is kept separately for each open comparison tab. If you switch tabs and come back, that tab keeps its own history. Closing a comparison tab clears its history.
 
-### Notes
+## For Development
 
-The Difference Viewer is intended for aligned multi-file review and quick merge operations. For external review, the main page can also open files in Diffuse when the external `diffuse` command is available on the system path.
+Run `npm test` to execute the diff regression suite.
+
+The current test set focuses on the file-comparison logic that has been the most sensitive during development:
+
+| Covered scenario | Why it matters |
+| --- | --- |
+| Multi-pane inserted block between blank rows | Protects the classic "extra lines in one target only" alignment case using synthetic prose. |
+| First blank-line delete | Guards the selection and `Missing in this file` behavior after delete. |
+| Repeated blank-line delete | Protects stability when deleting from the same blank block more than once. |
+| Delete + move blank rows | Catches regressions where editing one block breaks an unrelated block above it. |
+| Blank lines around changed text | Prevents simple line changes from turning into extra missing rows. |
+| Numbered prose rows in two and four panes | Keeps `1:`, `2:` style text aligned by key as counts grow. |
+| Copy into existing target rows | Verifies replacement stays one-to-one instead of creating extra gaps. |
+| Copy blank runs into missing blocks | Protects blank-line transfers and merge actions. |
+| Inline prose and numeric highlights | Verifies only the changed words or digits are highlighted, not surrounding punctuation. |
