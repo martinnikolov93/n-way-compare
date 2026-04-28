@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
     scan: (dirs) => ipcRenderer.invoke('scan', dirs),
+    isDiffuseAvailable: () => ipcRenderer.invoke('is-diffuse-available'),
     openDiffuse: (files) => ipcRenderer.invoke('open-diffuse', files),
     readFiles: (paths) => ipcRenderer.invoke('read-files', paths),
     getFileStats: (paths) => ipcRenderer.invoke('get-file-stats', paths),

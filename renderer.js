@@ -23,6 +23,9 @@ let updateOverlay = null;
 let scanOverlay = null;
 let scanOverlayTimer = null;
 let scanOverlayStepIndex = 0;
+let diffuseAvailable = false;
+let diffuseAvailabilityChecked = false;
+let diffuseAvailabilityPromise = null;
 
 const SCAN_OVERLAY_STEPS = Object.freeze([
     'Preparing folder scan',
@@ -31,6 +34,36 @@ const SCAN_OVERLAY_STEPS = Object.freeze([
     'Comparing file metadata',
     'Preparing comparison tree'
 ]);
+
+async function ensureDiffuseAvailability() {
+    if (diffuseAvailabilityChecked) {
+        return diffuseAvailable;
+    }
+
+    if (diffuseAvailabilityPromise) {
+        return diffuseAvailabilityPromise;
+    }
+
+    diffuseAvailabilityPromise = (async () => {
+        try {
+            diffuseAvailable = Boolean(await window.api.isDiffuseAvailable?.());
+        } catch (err) {
+            diffuseAvailable = false;
+            console.warn('Could not detect Diffuse availability:', err);
+        } finally {
+            diffuseAvailabilityChecked = true;
+            diffuseAvailabilityPromise = null;
+        }
+
+        if (currentTree) {
+            render();
+        }
+
+        return diffuseAvailable;
+    })();
+
+    return diffuseAvailabilityPromise;
+}
 
 const COMPARE_LAYOUT = Object.freeze({
     nameWidth: 360,
@@ -2160,15 +2193,6 @@ function render() {
 
         const availableFiles = Object.values(entries || {}).filter(Boolean).map(entry => entry.path);
 
-        const diffuseBtn = createActionButton({
-            label: 'Diffuse',
-            title: 'Open the external multi-file diff tool',
-            disabled: availableFiles.length < 2,
-            onClick: () => {
-                window.api.openDiffuse(availableFiles);
-            }
-        });
-
         const differenceBtn = createActionButton({
             label: 'Difference',
             className: 'is-primary',
@@ -2194,7 +2218,23 @@ function render() {
             }
         });
 
-        fileActionGroup.appendChild(diffuseBtn);
+        if (diffuseAvailable) {
+            const diffuseBtn = createActionButton({
+                label: 'Diffuse',
+                title: 'Open the external multi-file diff tool',
+                disabled: availableFiles.length < 2,
+                onClick: async () => {
+                    try {
+                        await window.api.openDiffuse(availableFiles);
+                    } catch (err) {
+                        alert('Diffuse error: ' + err.message);
+                    }
+                }
+            });
+
+            fileActionGroup.appendChild(diffuseBtn);
+        }
+
         fileActionGroup.appendChild(differenceBtn);
         fileActionSurface.appendChild(fileActionGroup);
         row.appendChild(fileActionCell);
@@ -2753,3 +2793,4 @@ document.addEventListener('keydown', event => {
 
 setFolderInputs(Array.from(document.querySelectorAll('#folders .folder-input')).map(input => input.value));
 refreshMainActionHistoryState();
+ensureDiffuseAvailability();

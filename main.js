@@ -3,12 +3,47 @@ const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const { exec } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const DifferenceFileTypes = require('./difference-file-types');
 
 let mainWindow = null;
 let updatePromptOpen = false;
 let updateDownloadInProgress = false;
+let diffuseExecutablePath = null;
+let diffuseAvailabilityPromise = null;
+
+function resolveDiffuseExecutable(forceRefresh = false) {
+    if (diffuseExecutablePath && !forceRefresh) {
+        return Promise.resolve(diffuseExecutablePath);
+    }
+
+    if (diffuseAvailabilityPromise && !forceRefresh) {
+        return diffuseAvailabilityPromise;
+    }
+
+    diffuseAvailabilityPromise = new Promise((resolve) => {
+        const command = process.platform === 'win32' ? 'where.exe' : 'which';
+        execFile(command, ['diffuse'], { windowsHide: true }, (error, stdout) => {
+            if (error) {
+                diffuseExecutablePath = null;
+                diffuseAvailabilityPromise = null;
+                resolve(null);
+                return;
+            }
+
+            const resolvedPath = String(stdout || '')
+                .split(/\r?\n/)
+                .map((line) => line.trim())
+                .find(Boolean) || null;
+
+            diffuseExecutablePath = resolvedPath;
+            diffuseAvailabilityPromise = null;
+            resolve(diffuseExecutablePath);
+        });
+    });
+
+    return diffuseAvailabilityPromise;
+}
 
 function createWindow() {
     const win = new BrowserWindow({
@@ -171,6 +206,7 @@ function configureAutoUpdater() {
 app.whenReady().then(() => {
     createWindow();
     configureAutoUpdater();
+    resolveDiffuseExecutable().catch(() => null);
 });
 
 const chokidar = require('chokidar');
@@ -955,18 +991,35 @@ ipcMain.handle('scan', async (e, input) => {
     return scanDirs(dirs, exclusions);
 });
 
-ipcMain.handle('open-diffuse', async (e, files) => {
-    // Windows-safe execution using spawn instead of exec
-    const { spawn } = require('child_process');
+ipcMain.handle('is-diffuse-available', async () => {
+    const diffusePath = await resolveDiffuseExecutable();
+    return Boolean(diffusePath);
+});
 
+ipcMain.handle('open-diffuse', async (e, files) => {
+    const diffusePath = await resolveDiffuseExecutable();
     const args = files.map(f => f);
 
-    const proc = spawn('diffuse', args, {
-        detached: true,
-        stdio: 'ignore',
-        shell: true
-    });
+    if (!diffusePath) {
+        throw new Error('Diffuse is not installed or is not available on PATH.');
+    }
 
+    return new Promise((resolve, reject) => {
+        const proc = spawn('diffuse', args, {
+            detached: true,
+            stdio: 'ignore',
+            shell: true
+        });
+
+        proc.once('error', (error) => {
+            reject(new Error('Could not start Diffuse: ' + error.message));
+        });
+
+        proc.once('spawn', () => {
+            proc.unref();
+            resolve({ success: true });
+        });
+    });
 });
 
 function getFileDiskSnapshot(filePath) {
