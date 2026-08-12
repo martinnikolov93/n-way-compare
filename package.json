@@ -6,6 +6,7 @@
     "start": "electron .",
     "test": "node tests/difference-engine.test.js",
     "generate:icon": "powershell -ExecutionPolicy Bypass -File scripts/generate-app-icon.ps1",
+    "prebuild": "if exist dist rmdir /s /q dist",
     "build": "electron-builder"
   },
   "build": {
