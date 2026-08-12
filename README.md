@@ -136,6 +136,10 @@ Click a row to select it. Drag within a pane to select multiple rows. Shift-clic
 
 Use the transfer and merge buttons to move selected text between neighboring panes.
 
+Use `Set as reference` on a file pane to compare every other file in the current Difference tab against that pane. Use `Unset as reference` to return to the default neighbor-based comparison.
+
+Use `Sticky tab` to pin a pane visually to the left while horizontally scrolling a wide comparison. The pane keeps its original comparison position, so transfer and merge shortcuts continue to use the same neighboring files as before.
+
 Double-click a row to edit it inline. Press `Ctrl+Enter` to commit the edit, `Esc` to cancel it, or click away to commit. Press `Tab` inside the editor to insert four spaces.
 
 Use `Save All` or `Ctrl+S` to write your changes to disk. Individual panes also show a `Save` button when that file has unsaved changes.
@@ -151,6 +155,9 @@ If an opened file changes on disk while its tab is still open, the viewer pauses
 | Save All | `Ctrl+S` | Saves all modified files in all open tabs. |
 | Reload | None | Reloads the active comparison from disk. |
 | Close | `Esc` | Closes the Difference Viewer popup. |
+| Set as reference | None | Compares every other file in the current tab against this pane. |
+| Unset as reference | None | Returns the current tab to neighbor-based comparison. |
+| Sticky tab | None | Pins this pane visually to the left while preserving its original position. |
 | Prev | `Alt+Up` | Jumps to the previous change. |
 | Next | `Alt+Down` | Jumps to the next change. |
 | Sel -> L | `Shift+Ctrl+Left` | Copies the current selection into the file on the left. |

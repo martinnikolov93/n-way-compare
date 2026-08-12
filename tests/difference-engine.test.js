@@ -27,8 +27,9 @@ function rebuildTab(tab) {
     return tab;
 }
 
-function createTabFromContents(contents) {
+function createTabFromContents(contents, options = {}) {
     return rebuildTab({
+        ...options,
         panes: contents.map(({ label, content }) => createPane(content, label))
     });
 }
@@ -236,6 +237,35 @@ test('changed lines with blank lines above and below stay paired instead of turn
     assert.deepEqual(block[1].map((cell) => cell.missing ? 'M' : cell.text.trim()), ['alpha', 'gamma']);
     assert.deepEqual(block[2].map((cell) => cell.missing ? 'M' : cell.text.trim()), ['beta', 'delta']);
     assert.deepEqual(block[3].map((cell) => cell.missing ? 'M' : cell.text), ['', '']);
+});
+
+test('reference mode compares every pane against the selected reference pane', () => {
+    const neighborTab = createTabFromContents([
+        { label: 'A', content: 'canonical\nshared' },
+        { label: 'B', content: 'variant\nshared' },
+        { label: 'C', content: 'variant\nshared' }
+    ]);
+
+    assert.equal(neighborTab.rows[0].cells[1].changedLeft, true);
+    assert.equal(neighborTab.rows[0].cells[2].changedLeft, false);
+    assert.equal(neighborTab.rows[0].cells[2].changedRight, false);
+
+    const referenceTab = createTabFromContents([
+        { label: 'A', content: 'canonical\nshared' },
+        { label: 'B', content: 'variant\nshared' },
+        { label: 'C', content: 'variant\nshared' }
+    ], {
+        referencePaneIndex: 0
+    });
+
+    assert.equal(referenceTab.referencePaneIndex, 0);
+    assert.equal(referenceTab.rows[0].cells[0].changedReference, false);
+    assert.equal(referenceTab.rows[0].cells[1].changedReference, true);
+    assert.equal(referenceTab.rows[0].cells[2].changedReference, true);
+    assert.equal(referenceTab.rows[1].cells[1].changedReference, false);
+    assert.equal(referenceTab.hunks.length, 1);
+    assert.equal(referenceTab.hunks[0].start, 0);
+    assert.equal(referenceTab.hunks[0].end, 0);
 });
 
 test('two-pane numbered prose rows stay aligned by their leading key', () => {

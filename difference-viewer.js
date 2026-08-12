@@ -101,6 +101,7 @@
             this.pendingDiskChangeNoticeItems = [];
             this.diskChangeNoticeOpen = false;
             this.diskChangeNoticeDirty = false;
+            this.referenceRebuildTabId = null;
 
             this.build();
             document.addEventListener('keydown', this.handleKeyDown.bind(this));
@@ -396,6 +397,40 @@
             return `repeat(${tab.panes.length}, ${track})`;
         }
 
+        getValidPaneIndex(tab, paneIndex) {
+            return Number.isInteger(paneIndex) && paneIndex >= 0 && paneIndex < (tab?.panes?.length || 0)
+                ? paneIndex
+                : null;
+        }
+
+        getReferencePaneIndex(tab) {
+            if (!tab || this.isImageTab(tab)) {
+                return null;
+            }
+
+            return this.getValidPaneIndex(tab, tab.referencePaneIndex);
+        }
+
+        hasReferencePane(tab) {
+            return this.getReferencePaneIndex(tab) !== null;
+        }
+
+        isReferencePane(tab, paneIndex) {
+            return this.getReferencePaneIndex(tab) === paneIndex;
+        }
+
+        getStickyPaneIndex(tab) {
+            return this.getValidPaneIndex(tab, tab?.stickyPaneIndex);
+        }
+
+        isStickyPane(tab, paneIndex) {
+            return this.getStickyPaneIndex(tab) === paneIndex;
+        }
+
+        cellHasChange(cell) {
+            return Boolean(cell?.changedLeft || cell?.changedRight || cell?.changedReference);
+        }
+
         isImageFilePath(filePath) {
             return Boolean(window.DifferenceFileTypes?.isImageFilePath?.(filePath));
         }
@@ -440,7 +475,14 @@
 
         createPaneHeader(tab, pane, paneIndex) {
             const header = document.createElement('div');
-            header.className = 'difference-pane-header' + (paneIndex === tab.focusPaneIndex ? ' is-active' : '');
+            const imageTab = this.isImageTab(tab);
+            const interactionLocked = this.tabHasInteractionLock(tab);
+            const referencePane = this.isReferencePane(tab, paneIndex);
+            const stickyPane = this.isStickyPane(tab, paneIndex);
+            header.className = 'difference-pane-header' +
+                (paneIndex === tab.focusPaneIndex ? ' is-active' : '') +
+                (referencePane ? ' is-reference-pane' : '') +
+                (stickyPane ? ' is-sticky-pane' : '');
             header.style.minWidth = this.paneMinWidth + 'px';
             header.style.maxWidth = this.paneMaxWidth + 'px';
 
@@ -451,16 +493,53 @@
             label.className = 'difference-pane-label';
             label.textContent = pane.label;
 
+            const actions = document.createElement('div');
+            actions.className = 'difference-pane-actions';
+
+            const referenceBtn = document.createElement('button');
+            const referenceDisabled = imageTab || interactionLocked || !pane.exists || Boolean(pane.error);
+            referenceBtn.type = 'button';
+            referenceBtn.className = 'difference-pane-btn' + (referenceDisabled ? ' is-disabled' : '');
+            referenceBtn.textContent = referencePane ? 'Unset as reference' : 'Set as reference';
+            referenceBtn.title = referencePane
+                ? 'Return this comparison to neighbor-based diffing'
+                : referenceDisabled
+                    ? 'Only available for loaded text files'
+                    : 'Compare every file in this tab against this file';
+            referenceBtn.addEventListener('click', (event) => {
+                event.stopPropagation();
+                if (referenceDisabled) {
+                    return;
+                }
+
+                this.setPaneReference(tab, paneIndex)
+                    .catch(err => this.setStatus('Reference update failed: ' + err.message));
+            });
+
+            const stickyBtn = document.createElement('button');
+            stickyBtn.type = 'button';
+            stickyBtn.className = 'difference-pane-btn' + (interactionLocked ? ' is-disabled' : '');
+            stickyBtn.textContent = stickyPane ? 'Unstick tab' : 'Sticky tab';
+            stickyBtn.title = stickyPane
+                ? 'Release this pane from the left edge'
+                : 'Keep this pane visually pinned to the left while scrolling';
+            stickyBtn.addEventListener('click', (event) => {
+                event.stopPropagation();
+                if (interactionLocked) {
+                    return;
+                }
+
+                this.toggleStickyPane(tab, paneIndex);
+            });
+
             const saveBtn = document.createElement('button');
-            const imageTab = this.isImageTab(tab);
-            const interactionLocked = this.tabHasUnresolvedDiskChanges(tab);
             saveBtn.type = 'button';
             saveBtn.className = 'difference-pane-btn' + (pane.dirty && !imageTab && !interactionLocked ? '' : ' is-disabled');
             saveBtn.textContent = imageTab ? 'View' : (pane.dirty ? 'Save' : 'Saved');
             saveBtn.title = imageTab
                 ? 'Image preview is read-only in this version'
                 : interactionLocked
-                    ? 'Resolve files changed on disk before saving'
+                    ? 'Resolve pending viewer locks before saving'
                     : 'Save this file';
             saveBtn.addEventListener('click', () => {
                 if (imageTab || !pane.dirty || interactionLocked) {
@@ -472,8 +551,11 @@
                     .catch(err => this.setStatus('Save failed: ' + err.message));
             });
 
+            actions.appendChild(referenceBtn);
+            actions.appendChild(stickyBtn);
+            actions.appendChild(saveBtn);
             labelRow.appendChild(label);
-            labelRow.appendChild(saveBtn);
+            labelRow.appendChild(actions);
 
             const filePath = document.createElement('div');
             filePath.className = 'difference-pane-file';
@@ -550,6 +632,18 @@
 
         tabHasUnresolvedDiskChanges(tab) {
             return Boolean(tab?.panes?.some((pane) => this.hasPaneDiskConflict(pane)));
+        }
+
+        tabHasReferenceRebuildLock(tab) {
+            return Boolean(tab && this.referenceRebuildTabId === tab.id);
+        }
+
+        tabHasInteractionLock(tab) {
+            return this.tabHasUnresolvedDiskChanges(tab) || this.tabHasReferenceRebuildLock(tab);
+        }
+
+        hasAnyReferenceRebuildLock() {
+            return Boolean(this.referenceRebuildTabId);
         }
 
         hasAnyUnresolvedDiskChanges() {
@@ -710,7 +804,7 @@
         }
 
         isActiveTabInteractionLocked() {
-            return this.tabHasUnresolvedDiskChanges(this.getActiveTab());
+            return this.tabHasInteractionLock(this.getActiveTab());
         }
 
         ensureWritableActiveTab(actionLabel = 'continue') {
@@ -718,8 +812,10 @@
                 return true;
             }
 
-            this.showDiskChangeNotice(true);
-            this.setStatus('Resolve files changed on disk before you ' + actionLabel + '.', true);
+            if (this.tabHasUnresolvedDiskChanges(this.getActiveTab())) {
+                this.showDiskChangeNotice(true);
+            }
+            this.setStatus('Resolve pending viewer locks before you ' + actionLabel + '.', true);
             return false;
         }
 
@@ -737,6 +833,98 @@
             if (!Array.isArray(tab.paneScrollLefts) || tab.paneScrollLefts.length !== tab.panes.length) {
                 tab.paneScrollLefts = Array.from({ length: tab.panes.length }, (_, paneIndex) => tab.paneScrollLefts?.[paneIndex] || 0);
             }
+        }
+
+        waitForNextPaint() {
+            return new Promise((resolve) => {
+                if (typeof requestAnimationFrame === 'function') {
+                    requestAnimationFrame(() => requestAnimationFrame(resolve));
+                    return;
+                }
+
+                setTimeout(resolve, 0);
+            });
+        }
+
+        createReferenceLockOverlay(tab) {
+            const overlay = document.createElement('div');
+            overlay.className = 'difference-reference-lock';
+
+            const card = document.createElement('div');
+            card.className = 'difference-reference-lock-card';
+
+            const title = document.createElement('div');
+            title.className = 'difference-reference-lock-title';
+            title.textContent = 'Rebuilding reference diff';
+
+            const detail = document.createElement('div');
+            detail.className = 'difference-reference-lock-detail';
+            detail.textContent = 'Locking the viewer while the rows are realigned.';
+
+            card.appendChild(title);
+            card.appendChild(detail);
+            overlay.appendChild(card);
+            return overlay;
+        }
+
+        async setPaneReference(tab, paneIndex) {
+            if (!tab || this.referenceRebuildTabId) {
+                return;
+            }
+
+            if (this.isImageTab(tab)) {
+                this.setStatus('Reference mode is only available for text comparisons.');
+                return;
+            }
+
+            if (this.tabHasUnresolvedDiskChanges(tab)) {
+                this.showDiskChangeNotice(true);
+                this.setStatus('Resolve files changed on disk before changing the reference.', true);
+                return;
+            }
+
+            const pane = tab.panes[paneIndex];
+            if (!pane || !pane.exists || pane.error) {
+                this.setStatus('Only loaded text files can be used as a reference.');
+                return;
+            }
+
+            const currentReferencePaneIndex = this.getReferencePaneIndex(tab);
+            const nextReferencePaneIndex = currentReferencePaneIndex === paneIndex ? null : paneIndex;
+
+            this.referenceRebuildTabId = tab.id;
+            this.render();
+            await this.waitForNextPaint();
+
+            let finalStatus = '';
+            try {
+                tab.referencePaneIndex = nextReferencePaneIndex;
+                window.DifferenceEngine.rebuildTab(tab);
+                this.persistTabs();
+                finalStatus = nextReferencePaneIndex === null
+                    ? 'Returned to neighbor-based diffing.'
+                    : 'Using ' + pane.label + ' as the reference for this tab.';
+            } finally {
+                this.referenceRebuildTabId = null;
+                this.render();
+                if (finalStatus) {
+                    this.setStatus(finalStatus, true);
+                }
+            }
+        }
+
+        toggleStickyPane(tab, paneIndex) {
+            if (!tab || this.tabHasInteractionLock(tab)) {
+                return;
+            }
+
+            const stickyPaneIndex = this.getStickyPaneIndex(tab);
+            tab.stickyPaneIndex = stickyPaneIndex === paneIndex ? null : paneIndex;
+            const finalStatus = tab.stickyPaneIndex === null
+                ? 'Sticky tab cleared.'
+                : 'Pinned ' + tab.panes[paneIndex].label + ' to the left edge.';
+            this.renderActiveTab();
+            this.setStatus(finalStatus, true);
         }
 
         refreshSelectionVisuals() {
@@ -802,10 +990,24 @@
             return window.DifferenceInlineDiff.getTokenDifferenceRanges(sourceText, compareText, sourceOffset);
         }
 
-        getChangedRangesForCell(row, paneIndex) {
+        getChangedRangesForCell(tab, row, paneIndex) {
             const cell = row.cells[paneIndex];
             if (!cell || cell.missing || !cell.text) {
                 return [];
+            }
+
+            const referencePaneIndex = this.getReferencePaneIndex(tab);
+            if (referencePaneIndex !== null) {
+                if (paneIndex === referencePaneIndex || !cell.changedReference) {
+                    return [];
+                }
+
+                const referenceCell = row.cells[referencePaneIndex];
+                if (referenceCell && !referenceCell.missing) {
+                    return mergeRanges(this.getDifferenceRanges(cell.text, referenceCell.text));
+                }
+
+                return [{ start: 0, end: cell.text.length }];
             }
 
             const ranges = [];
@@ -830,7 +1032,7 @@
             return mergeRanges(ranges);
         }
 
-        renderCodeMarkup(row, paneIndex) {
+        renderCodeMarkup(tab, row, paneIndex) {
             const cell = row.cells[paneIndex];
 
             if (!cell || cell.missing) {
@@ -838,7 +1040,7 @@
             }
 
             const text = cell.text.length ? cell.text : ' ';
-            const ranges = this.getChangedRangesForCell(row, paneIndex);
+            const ranges = this.getChangedRangesForCell(tab, row, paneIndex);
             if (!ranges.length) {
                 return escapeHtml(text);
             }
@@ -862,7 +1064,7 @@
             return parts.join('');
         }
 
-        renderCodeContent(codeEl, row, paneIndex) {
+        renderCodeContent(codeEl, tab, row, paneIndex) {
             const cell = row.cells[paneIndex];
 
             if (!cell || cell.missing) {
@@ -871,12 +1073,12 @@
             }
 
             const text = cell.text.length ? cell.text : ' ';
-            if (!cell.changedLeft && !cell.changedRight) {
+            if (!this.cellHasChange(cell)) {
                 codeEl.textContent = text;
                 return;
             }
 
-            const ranges = this.getChangedRangesForCell(row, paneIndex);
+            const ranges = this.getChangedRangesForCell(tab, row, paneIndex);
             if (!ranges.length) {
                 codeEl.textContent = text;
                 return;
@@ -1236,6 +1438,8 @@
                 rows: [],
                 hunks: [],
                 dirty: false,
+                referencePaneIndex: null,
+                stickyPaneIndex: null,
                 focusPaneIndex: this.getDefaultFocusPaneIndex(panes),
                 selection: null,
                 history: this.createTabHistory()
@@ -1582,7 +1786,14 @@
                 }
             }
 
+            const previousReferencePaneIndex = this.getReferencePaneIndex(tab);
+            const previousStickyPaneIndex = this.getStickyPaneIndex(tab);
             const refreshed = await this.loadTab(tab.descriptor, tab.id);
+            refreshed.referencePaneIndex = this.getValidPaneIndex(refreshed, previousReferencePaneIndex);
+            refreshed.stickyPaneIndex = this.getValidPaneIndex(refreshed, previousStickyPaneIndex);
+            if (refreshed.referencePaneIndex !== null && !this.isImageTab(refreshed)) {
+                window.DifferenceEngine.rebuildTab(refreshed);
+            }
             Object.assign(tab, refreshed);
             this.pendingDiskChangeNoticeItems = this.pendingDiskChangeNoticeItems
                 .filter((item) => item.tab.id !== tab.id);
@@ -1599,9 +1810,11 @@
 
         async savePane(tab, paneIndex) {
             this.finishInlineEdit({ commit: true });
-            if (this.tabHasUnresolvedDiskChanges(tab)) {
-                this.showDiskChangeNotice(true);
-                this.setStatus('Resolve files changed on disk before saving.', true);
+            if (this.tabHasInteractionLock(tab)) {
+                if (this.tabHasUnresolvedDiskChanges(tab)) {
+                    this.showDiskChangeNotice(true);
+                }
+                this.setStatus('Resolve pending viewer locks before saving.', true);
                 return;
             }
 
@@ -1633,9 +1846,11 @@
 
         async saveAllTabs() {
             this.finishInlineEdit({ commit: true });
-            if (this.hasAnyUnresolvedDiskChanges()) {
-                this.showDiskChangeNotice(true);
-                this.setStatus('Resolve files changed on disk before using Save All.', true);
+            if (this.hasAnyUnresolvedDiskChanges() || this.hasAnyReferenceRebuildLock()) {
+                if (this.hasAnyUnresolvedDiskChanges()) {
+                    this.showDiskChangeNotice(true);
+                }
+                this.setStatus('Resolve pending viewer locks before using Save All.', true);
                 return;
             }
 
@@ -1834,7 +2049,9 @@
 
             this.tabs.forEach(tab => {
                 const tabButton = document.createElement('div');
-                tabButton.className = 'difference-tab' + (tab.id === this.activeTabId ? ' is-active' : '');
+                tabButton.className = 'difference-tab' +
+                    (tab.id === this.activeTabId ? ' is-active' : '') +
+                    (this.hasReferencePane(tab) ? ' is-reference-mode' : '');
                 tabButton.addEventListener('click', () => {
                     this.activeTabId = tab.id;
                     this.persistTabs();
@@ -1859,6 +2076,14 @@
                 paneBadge.className = 'difference-badge';
                 paneBadge.textContent = tab.panes.length + ' file' + (tab.panes.length === 1 ? '' : 's');
                 badges.appendChild(paneBadge);
+
+                const referencePaneIndex = this.getReferencePaneIndex(tab);
+                if (referencePaneIndex !== null) {
+                    const referenceBadge = document.createElement('span');
+                    referenceBadge.className = 'difference-badge is-reference';
+                    referenceBadge.textContent = 'Reference: ' + (tab.panes[referencePaneIndex]?.label || 'file');
+                    badges.appendChild(referenceBadge);
+                }
 
                 if (tab.panes.some(pane => pane.dirty)) {
                     const dirtyBadge = document.createElement('span');
@@ -1911,7 +2136,7 @@
 
         createRowElement(tab, row, rowIndex) {
             const rowEl = document.createElement('div');
-            const rowChanged = row.cells.some(cell => cell?.changedLeft || cell?.changedRight || cell?.missing);
+            const rowChanged = row.cells.some(cell => this.cellHasChange(cell) || cell?.missing);
             rowEl.className = 'difference-row' +
                 (this.hunkStartSet?.has(rowIndex) ? ' is-change-start' : '') +
                 (rowChanged ? ' is-changed' : '');
@@ -1930,6 +2155,14 @@
                     cellEl.classList.add('is-active-pane');
                 }
 
+                if (this.isReferencePane(tab, paneIndex)) {
+                    cellEl.classList.add('is-reference-pane');
+                }
+
+                if (this.isStickyPane(tab, paneIndex)) {
+                    cellEl.classList.add('is-sticky-pane');
+                }
+
                 if (tab.selection && tab.selection.paneIndex === paneIndex && rowIndex >= tab.selection.startRow && rowIndex <= tab.selection.endRow) {
                     cellEl.classList.add('is-selected');
                 }
@@ -1942,7 +2175,7 @@
                     cellEl.classList.add('is-changed-right');
                 }
 
-                if (cell.changedLeft || cell.changedRight || cell.missing) {
+                if (this.cellHasChange(cell) || cell.missing) {
                     cellEl.classList.add('is-diff-row');
                 }
 
@@ -1959,7 +2192,7 @@
 
                 const code = document.createElement('div');
                 code.className = 'difference-code' + (cell.missing ? ' is-placeholder' : '');
-                this.renderCodeContent(code, row, paneIndex);
+                this.renderCodeContent(code, tab, row, paneIndex);
 
                 cellEl.appendChild(gutter);
                 codeScroller.appendChild(code);
@@ -2049,7 +2282,7 @@
 
         rowHasPaneDiff(row, paneIndex) {
             const cell = row?.cells?.[paneIndex];
-            return Boolean(cell && (cell.changedLeft || cell.changedRight || cell.missing));
+            return Boolean(cell && (this.cellHasChange(cell) || cell.missing));
         }
 
         getOverviewSegments(tab) {
@@ -2407,7 +2640,9 @@
 
         createImagePane(tab, pane, paneIndex) {
             const paneEl = document.createElement('div');
-            paneEl.className = 'difference-image-pane' + (paneIndex === tab.focusPaneIndex ? ' is-active' : '');
+            paneEl.className = 'difference-image-pane' +
+                (paneIndex === tab.focusPaneIndex ? ' is-active' : '') +
+                (this.isStickyPane(tab, paneIndex) ? ' is-sticky-pane' : '');
             paneEl.style.minWidth = this.paneMinWidth + 'px';
             paneEl.style.maxWidth = this.paneMaxWidth + 'px';
             paneEl.addEventListener('click', () => {
@@ -2507,7 +2742,8 @@
 
         createConflictOverlayCell(tab, pane, paneIndex) {
             const cell = document.createElement('div');
-            cell.className = 'difference-conflict-overlay-cell';
+            cell.className = 'difference-conflict-overlay-cell' +
+                (this.isStickyPane(tab, paneIndex) ? ' is-sticky-pane' : '');
             cell.style.minWidth = this.paneMinWidth + 'px';
             cell.style.maxWidth = this.paneMaxWidth + 'px';
 
@@ -2617,6 +2853,9 @@
             }
             gridScroll.appendChild(grid);
             compare.appendChild(gridScroll);
+            if (this.tabHasReferenceRebuildLock(tab)) {
+                compare.appendChild(this.createReferenceLockOverlay(tab));
+            }
             this.bodyEl.appendChild(compare);
 
             this.gridScroll = gridScroll;
@@ -2745,7 +2984,8 @@
 
                 tab.panes.forEach((_, paneIndex) => {
                     const scrollbarCell = document.createElement('div');
-                    scrollbarCell.className = 'difference-pane-scrollbar-cell';
+                    scrollbarCell.className = 'difference-pane-scrollbar-cell' +
+                        (this.isStickyPane(tab, paneIndex) ? ' is-sticky-pane' : '');
                     scrollbarCell.style.minWidth = this.paneMinWidth + 'px';
                     scrollbarCell.style.maxWidth = this.paneMaxWidth + 'px';
 
@@ -2777,6 +3017,10 @@
 
             if (tab.rows.length) {
                 compare.appendChild(this.createOverviewMap(tab));
+            }
+
+            if (this.tabHasReferenceRebuildLock(tab)) {
+                compare.appendChild(this.createReferenceLockOverlay(tab));
             }
 
             this.bodyEl.appendChild(compare);
@@ -2952,6 +3196,11 @@
                 hunks,
                 dirtyCount + ' dirty file' + (dirtyCount === 1 ? '' : 's')
             ];
+            const referencePaneIndex = this.getReferencePaneIndex(tab);
+
+            if (referencePaneIndex !== null) {
+                statusParts.push('Reference: ' + (tab.panes[referencePaneIndex]?.label || 'n/a'));
+            }
 
             if (conflictCount) {
                 statusParts.push(conflictCount + ' changed on disk');
@@ -2965,8 +3214,8 @@
             const hasSelection = Boolean(tab?.selection);
             const dirtyTabs = this.tabs.some(item => item.panes.some(pane => pane.dirty));
             const imageTab = this.isImageTab(tab);
-            const lockedTab = this.tabHasUnresolvedDiskChanges(tab);
-            const anyLockedTabs = this.hasAnyUnresolvedDiskChanges();
+            const lockedTab = this.tabHasInteractionLock(tab);
+            const anyLockedTabs = this.hasAnyUnresolvedDiskChanges() || this.hasAnyReferenceRebuildLock();
 
             this.toggleDisabled(this.saveAllBtn, !dirtyTabs || anyLockedTabs);
             this.toggleDisabled(this.reloadBtn, !tab);
@@ -3069,7 +3318,7 @@
                 return false;
             }
 
-            if (this.tabHasUnresolvedDiskChanges(selection.tab)) {
+            if (this.tabHasInteractionLock(selection.tab)) {
                 return false;
             }
 
@@ -3087,7 +3336,7 @@
                 return false;
             }
 
-            if (this.tabHasUnresolvedDiskChanges(selection.tab)) {
+            if (this.tabHasInteractionLock(selection.tab)) {
                 return false;
             }
 
@@ -3105,7 +3354,7 @@
                 return false;
             }
 
-            if (this.tabHasUnresolvedDiskChanges(selection.tab)) {
+            if (this.tabHasInteractionLock(selection.tab)) {
                 return false;
             }
 
@@ -3142,9 +3391,11 @@
         }
 
         applyReplacement(tab, paneIndex, startRow, endRow, replacementLines, description, options = {}) {
-            if (this.tabHasUnresolvedDiskChanges(tab)) {
-                this.showDiskChangeNotice(true);
-                this.setStatus('Resolve files changed on disk before editing this comparison.', true);
+            if (this.tabHasInteractionLock(tab)) {
+                if (this.tabHasUnresolvedDiskChanges(tab)) {
+                    this.showDiskChangeNotice(true);
+                }
+                this.setStatus('Resolve pending viewer locks before editing this comparison.', true);
                 return;
             }
 

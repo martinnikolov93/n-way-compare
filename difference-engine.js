@@ -880,9 +880,17 @@
         });
     }
 
-    function getAnchorPaneIndex(panes) {
+    function getAnchorPaneIndex(panes, preferredPaneIndex = null) {
         if (!panes.length) {
             return 0;
+        }
+
+        if (
+            Number.isInteger(preferredPaneIndex) &&
+            preferredPaneIndex >= 0 &&
+            preferredPaneIndex < panes.length
+        ) {
+            return preferredPaneIndex;
         }
 
         const middle = Math.floor((panes.length - 1) / 2);
@@ -1001,12 +1009,12 @@
         };
     }
 
-    function buildRows(panes) {
+    function buildRows(panes, preferredAnchorPaneIndex = null) {
         if (!panes.length) {
             return [];
         }
 
-        const anchorPaneIndex = getAnchorPaneIndex(panes);
+        const anchorPaneIndex = getAnchorPaneIndex(panes, preferredAnchorPaneIndex);
         const anchorPane = panes[anchorPaneIndex];
         const anchorLines = anchorPane.lines;
         const alignments = panes.map((pane, paneIndex) => {
@@ -1043,11 +1051,19 @@
         return rows;
     }
 
-    function buildHunks(rows) {
+    function buildHunks(rows, referencePaneIndex = null) {
         const hunks = [];
         let start = null;
+        const hasReferencePane = Number.isInteger(referencePaneIndex);
 
         function rowIsChanged(row) {
+            if (hasReferencePane) {
+                const referenceCell = row.cells[referencePaneIndex];
+                return row.cells.some((cell, cellIndex) => {
+                    return cellIndex !== referencePaneIndex && !cellsEqual(referenceCell, cell);
+                });
+            }
+
             return row.cells.some((cell, cellIndex) => {
                 if (cellIndex === 0) return false;
                 return !cellsEqual(row.cells[cellIndex - 1], cell);
@@ -1094,23 +1110,49 @@
             };
         });
 
-        tab.rows = buildRows(tab.panes).map((row, rowIndex) => {
+        const referencePaneIndex = (
+            Number.isInteger(tab.referencePaneIndex) &&
+            tab.referencePaneIndex >= 0 &&
+            tab.referencePaneIndex < tab.panes.length
+        )
+            ? tab.referencePaneIndex
+            : null;
+        tab.referencePaneIndex = referencePaneIndex;
+
+        tab.rows = buildRows(tab.panes, referencePaneIndex).map((row, rowIndex) => {
+            const referenceCell = Number.isInteger(referencePaneIndex)
+                ? row.cells[referencePaneIndex]
+                : null;
             const cells = row.cells.map((cell, paneIndex, allCells) => {
+                const referenceChanged = Number.isInteger(referencePaneIndex)
+                    ? paneIndex !== referencePaneIndex && !cellsEqual(referenceCell, cell)
+                    : false;
+
                 if (!cell) {
                     return {
                         text: '',
                         lineNumber: null,
                         missing: true,
-                        changedLeft: paneIndex > 0 && !cellsEqual(allCells[paneIndex - 1], null),
-                        changedRight: paneIndex < allCells.length - 1 && !cellsEqual(null, allCells[paneIndex + 1])
+                        changedLeft: Number.isInteger(referencePaneIndex)
+                            ? referenceChanged
+                            : paneIndex > 0 && !cellsEqual(allCells[paneIndex - 1], null),
+                        changedRight: Number.isInteger(referencePaneIndex)
+                            ? false
+                            : paneIndex < allCells.length - 1 && !cellsEqual(null, allCells[paneIndex + 1]),
+                        changedReference: referenceChanged
                     };
                 }
 
                 return {
                     ...cell,
                     missing: false,
-                    changedLeft: paneIndex > 0 && !cellsEqual(allCells[paneIndex - 1], cell),
-                    changedRight: paneIndex < allCells.length - 1 && !cellsEqual(cell, allCells[paneIndex + 1])
+                    changedLeft: Number.isInteger(referencePaneIndex)
+                        ? referenceChanged
+                        : paneIndex > 0 && !cellsEqual(allCells[paneIndex - 1], cell),
+                    changedRight: Number.isInteger(referencePaneIndex)
+                        ? false
+                        : paneIndex < allCells.length - 1 && !cellsEqual(cell, allCells[paneIndex + 1]),
+                    changedReference: referenceChanged
                 };
             });
 
@@ -1120,7 +1162,7 @@
             };
         });
 
-        tab.hunks = buildHunks(tab.rows);
+        tab.hunks = buildHunks(tab.rows, referencePaneIndex);
         tab.dirty = tab.panes.some(pane => pane.dirty);
         return tab;
     }
