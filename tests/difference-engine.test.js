@@ -340,6 +340,107 @@ test('copying over existing target rows keeps a one-to-one replacement without i
     ]);
 });
 
+test('a block moved past repeated boilerplate lines stays contiguous instead of crossing (patience-first diff)', () => {
+    // Diffuse never falls back to a plain LCS pass: an unconstrained LCS is
+    // free to match a common-but-non-unique line (here "pass" and the blank
+    // separator) far from its real context whenever that maximizes the raw
+    // match count, which produces an interleaved, hard-to-read diff. This
+    // fixture moves "def c()" from the end to the front past two "pass"/
+    // blank pairs shared with the untouched functions, and expects the
+    // clean result: a contiguous insert at the top, "def a()"/"def b()" left
+    // completely untouched, and a contiguous delete at the bottom.
+    const tab = createTabFromContents([
+        { label: 'before.py', content: 'def a():\npass\n\ndef b():\npass\n\ndef c():\npass' },
+        { label: 'after.py', content: 'def c():\npass\n\ndef a():\npass\n\ndef b():\npass' }
+    ]);
+
+    const rows = collectWindow(tab, 0, tab.rows.length - 1);
+    assert.deepEqual(rows.map((row) => row.map((cell) => cell.missing ? 'M' : cell.text)), [
+        ['M', 'def c():'],
+        ['M', 'pass'],
+        ['M', ''],
+        ['def a():', 'def a():'],
+        ['pass', 'pass'],
+        ['', ''],
+        ['def b():', 'def b():'],
+        ['pass', 'pass'],
+        ['', 'M'],
+        ['def c():', 'M'],
+        ['pass', 'M']
+    ]);
+});
+
+test('patience-first diffing stays fast on a larger, repetitive file with scattered edits', () => {
+    const tokens = ['{', '}', '', 'if (x) {', 'return value;', 'const a = 1;', 'log(a);', 'end', 'pass', '    x += 1;'];
+    const editedLineIndices = [50, 150, 250, 350, 450, 550];
+
+    function makeLines(n, editedIndices) {
+        const lines = [];
+        for (let i = 0; i < n; i += 1) {
+            lines.push(editedIndices.has(i) ? `EDITED_${i}` : tokens[i % tokens.length]);
+        }
+        return lines.join('\n');
+    }
+
+    const before = Date.now();
+    const tab = createTabFromContents([
+        { label: 'a.txt', content: makeLines(600, new Set()) },
+        { label: 'b.txt', content: makeLines(600, new Set(editedLineIndices)) }
+    ]);
+    const elapsedMs = Date.now() - before;
+
+    assert.ok(elapsedMs < 2000, `expected the diff to complete quickly, took ${elapsedMs}ms`);
+    assert.equal(tab.hunks.length, editedLineIndices.length);
+});
+
+test('unrelated lines of different counts show as a clean delete+insert instead of a forced weak pairing', () => {
+    // The previous unconditional 0.08 "keep them paired" floor matched any
+    // two non-blank lines inside a changed block, even with zero real
+    // similarity, which made totally unrelated lines look like an edit of
+    // each other. The floor now only applies when both sides have the same
+    // number of lines, since only then is a 1:1 correspondence plausible.
+    const tab = createTabFromContents([
+        { label: 'A', content: 'keep-top\nline about weather today\nline about sports scores\nline about stock market\nkeep-bottom' },
+        { label: 'B', content: 'keep-top\na brand new unrelated topic\nkeep-bottom' }
+    ]);
+
+    const rows = collectWindow(tab, 0, 5);
+    assert.deepEqual(rows.map((row) => row.map((cell) => cell.missing ? 'M' : cell.text)), [
+        ['keep-top', 'keep-top'],
+        ['line about weather today', 'M'],
+        ['line about sports scores', 'M'],
+        ['line about stock market', 'M'],
+        ['M', 'a brand new unrelated topic'],
+        ['keep-bottom', 'keep-bottom']
+    ]);
+});
+
+test('the shared reference anchor is picked by content similarity, not by position, so one outlier pane does not make the rest look changed', () => {
+    // The previous anchor heuristic only looked at index distance from the
+    // middle pane, so a genuine outlier sitting at the positionally-middle
+    // index became the anchor and every other, identical, pane was shown
+    // diffed against it. Four of these five panes are byte-identical; the
+    // outlier sits at the positional middle (index 2) to prove the anchor
+    // is now chosen by actual content similarity instead.
+    const common = 'header\nalpha\nbeta\ngamma\ndelta\nfooter';
+    const outlier = 'totally\ndifferent\ncontent\nunrelated\nto\nthe\nothers\nentirely';
+
+    const tab = createTabFromContents([
+        { label: 'A', content: common },
+        { label: 'B', content: common },
+        { label: 'C', content: outlier },
+        { label: 'D', content: common },
+        { label: 'E', content: common }
+    ]);
+
+    assert.equal(tab.rows.length, 14);
+
+    const missingCountsByPane = tab.panes.map((_, paneIndex) =>
+        tab.rows.filter((row) => row.cells[paneIndex].missing).length
+    );
+    assert.deepEqual(missingCountsByPane, [8, 8, 6, 8, 8]);
+});
+
 test('inline diff can highlight only the changed core of a similar word and leave the shared ending alone', () => {
     const source = 'A quiet amber lantern waits by the door.';
     const compare = 'A quiet silver lantern waits by the door.';

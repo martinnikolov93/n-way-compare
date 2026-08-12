@@ -1,6 +1,4 @@
 (function () {
-    const EXACT_DIFF_PRODUCT_LIMIT = 250000;
-
     function detectNewline(text) {
         return text.includes('\r\n') ? '\r\n' : '\n';
     }
@@ -62,57 +60,6 @@
         if (!left && !right) return true;
         if (!left || !right) return false;
         return normalizeComparableLine(left.text) === normalizeComparableLine(right.text);
-    }
-
-    function buildExactDiff(leftLines, rightLines) {
-        const leftLength = leftLines.length;
-        const rightLength = rightLines.length;
-        const matrix = Array.from({ length: leftLength + 1 }, () => new Uint32Array(rightLength + 1));
-
-        for (let leftIndex = leftLength - 1; leftIndex >= 0; leftIndex -= 1) {
-            const row = matrix[leftIndex];
-            const nextRow = matrix[leftIndex + 1];
-
-            for (let rightIndex = rightLength - 1; rightIndex >= 0; rightIndex -= 1) {
-                row[rightIndex] = leftLines[leftIndex] === rightLines[rightIndex]
-                    ? nextRow[rightIndex + 1] + 1
-                    : Math.max(nextRow[rightIndex], row[rightIndex + 1]);
-            }
-        }
-
-        const ops = [];
-        let leftIndex = 0;
-        let rightIndex = 0;
-
-        while (leftIndex < leftLength && rightIndex < rightLength) {
-            if (leftLines[leftIndex] === rightLines[rightIndex]) {
-                ops.push({ type: 'equal', aIndex: leftIndex, bIndex: rightIndex });
-                leftIndex += 1;
-                rightIndex += 1;
-                continue;
-            }
-
-            if (matrix[leftIndex + 1][rightIndex] >= matrix[leftIndex][rightIndex + 1]) {
-                ops.push({ type: 'delete', aIndex: leftIndex });
-                leftIndex += 1;
-                continue;
-            }
-
-            ops.push({ type: 'insert', bIndex: rightIndex });
-            rightIndex += 1;
-        }
-
-        while (leftIndex < leftLength) {
-            ops.push({ type: 'delete', aIndex: leftIndex });
-            leftIndex += 1;
-        }
-
-        while (rightIndex < rightLength) {
-            ops.push({ type: 'insert', bIndex: rightIndex });
-            rightIndex += 1;
-        }
-
-        return ops;
     }
 
     // Large sections need stable anchors beyond a short look-ahead. This mirrors
@@ -492,10 +439,13 @@
             ops.push({ type: 'equal', aIndex: index, bIndex: index });
         }
 
-        const product = middleLeft.length * middleRight.length;
-        const middleOps = product <= EXACT_DIFF_PRODUCT_LIMIT
-            ? buildExactDiff(middleLeft, middleRight)
-            : buildPatienceDiff(middleLeft, middleRight);
+        // Diffuse never falls back to a plain LCS pass, even on small inputs:
+        // an unconstrained LCS happily matches a common-but-non-unique line
+        // (a brace, a blank line) far from its real context whenever that
+        // maximizes the raw match count, which reads as a nonsensical jump.
+        // Patience anchors on lines that are unique on both sides first, so
+        // reordered/moved blocks stay contiguous instead of interleaving.
+        const middleOps = buildPatienceDiff(middleLeft, middleRight);
 
         middleOps.forEach(op => {
             if (op.type === 'equal') {
@@ -726,7 +676,7 @@
         return 0;
     }
 
-    function getLinePairScore(leftEntry, rightEntry) {
+    function getLinePairScore(leftEntry, rightEntry, allowWeakPairing) {
         const leftText = typeof leftEntry?.text === 'string' ? leftEntry.text : '';
         const rightText = typeof rightEntry?.text === 'string' ? rightEntry.text : '';
         const leftNormalized = normalizeComparableLine(leftText);
@@ -767,6 +717,10 @@
             return similarity;
         }
 
+        if (!allowWeakPairing) {
+            return 0;
+        }
+
         // Keep ordinary text lines paired inside changed blocks even when they
         // share little literal text, otherwise whole blocks degrade into
         // delete+insert noise instead of a clean line-to-line diff.
@@ -776,6 +730,11 @@
     function buildWeightedPairOps(leftEntries, rightEntries) {
         const leftLength = leftEntries.length;
         const rightLength = rightEntries.length;
+        // Only trust a same-shape block enough to force weak, low-similarity
+        // pairings. When the counts differ there is no positional evidence the
+        // lines correspond at all, so unrelated content should show as plain
+        // delete+insert instead of a misleading "modify" pairing.
+        const allowWeakPairing = leftLength === rightLength;
         const scores = Array.from({ length: leftLength + 1 }, () => new Float64Array(rightLength + 1));
         const steps = Array.from({ length: leftLength + 1 }, () => new Uint8Array(rightLength + 1));
         const EPSILON = 0.000001;
@@ -790,7 +749,7 @@
                     bestStep = 2; // insert
                 }
 
-                const pairScore = getLinePairScore(leftEntries[leftIndex], rightEntries[rightIndex]);
+                const pairScore = getLinePairScore(leftEntries[leftIndex], rightEntries[rightIndex], allowWeakPairing);
                 if (pairScore > 0) {
                     const matchScore = scores[leftIndex + 1][rightIndex + 1] + pairScore;
                     if (matchScore > bestScore + EPSILON || Math.abs(matchScore - bestScore) <= EPSILON) {
@@ -880,6 +839,21 @@
         });
     }
 
+    function countMatchedLines(paneA, paneB) {
+        const linesA = paneA.lines.map(normalizeComparableLine);
+        const linesB = paneB.lines.map(normalizeComparableLine);
+        const ops = buildPatienceDiff(linesA, linesB);
+        let matched = 0;
+
+        for (let index = 0; index < ops.length; index += 1) {
+            if (ops[index].type === 'equal') {
+                matched += 1;
+            }
+        }
+
+        return matched;
+    }
+
     function getAnchorPaneIndex(panes, preferredPaneIndex = null) {
         if (!panes.length) {
             return 0;
@@ -894,16 +868,46 @@
         }
 
         const middle = Math.floor((panes.length - 1) / 2);
-        const distances = panes.map((pane, index) => ({
-            index,
-            exists: pane.exists !== false,
-            lineCount: pane.lines.length,
-            distance: Math.abs(index - middle)
-        }));
+        const existingIndices = [];
+        panes.forEach((pane, index) => {
+            if (pane.exists !== false) {
+                existingIndices.push(index);
+            }
+        });
+        // With 3+ existing panes a single outlier file can otherwise become the
+        // anchor just for sitting closest to the middle index, which makes
+        // every other, more similar, pane look changed. Score how
+        // representative each candidate is of the whole set (a medoid)
+        // instead, and only fall back to position as a tie-break.
+        const scoreSimilarity = existingIndices.length > 2;
 
-        distances.sort((left, right) => {
+        const candidates = panes.map((pane, index) => {
+            let similarityScore = 0;
+
+            if (scoreSimilarity && pane.exists !== false) {
+                existingIndices.forEach((otherIndex) => {
+                    if (otherIndex !== index) {
+                        similarityScore += countMatchedLines(pane, panes[otherIndex]);
+                    }
+                });
+            }
+
+            return {
+                index,
+                exists: pane.exists !== false,
+                lineCount: pane.lines.length,
+                distance: Math.abs(index - middle),
+                similarityScore
+            };
+        });
+
+        candidates.sort((left, right) => {
             if (left.exists !== right.exists) {
                 return left.exists ? -1 : 1;
+            }
+
+            if (left.similarityScore !== right.similarityScore) {
+                return right.similarityScore - left.similarityScore;
             }
 
             if (left.distance !== right.distance) {
@@ -913,7 +917,7 @@
             return right.lineCount - left.lineCount;
         });
 
-        return distances[0]?.index ?? 0;
+        return candidates[0]?.index ?? 0;
     }
 
     function buildPaneAlignment(anchorPane, pane) {
