@@ -710,12 +710,17 @@
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: 76px 12px 12px;
+  padding: 12px;
   background: rgba(232, 237, 245, 0.76);
   pointer-events: auto;
 }
 
 .difference-conflict-card {
+  /* Sticks to just below the sticky pane headers instead of scrolling away
+     with the (possibly very tall) grid content, so it stays visible no
+     matter how far down the file the viewer is scrolled. */
+  position: sticky;
+  top: 76px;
   width: min(100%, 320px);
   padding: 14px 14px 12px;
   border: 1px solid #d0a95f;

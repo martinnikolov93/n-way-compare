@@ -415,6 +415,48 @@ test('unrelated lines of different counts show as a clean delete+insert instead 
     ]);
 });
 
+test('mismatched "key: value" lines of different counts show as a clean delete+insert instead of a forced weak pairing', () => {
+    // The "leading key" boost path had its own unconditional floor (0.04)
+    // for lines whose keys differ, unguarded by count-matching - so a
+    // coincidentally high raw similarity between two differently-keyed
+    // lines (sharing the ": " glue and part of the value) could still force
+    // a pairing even with no positional evidence (unequal block sizes).
+    const tab = createTabFromContents([
+        { label: 'A', content: 'keep-top\nfirstField: 1\nsecondField: 2\nthirdField: 3\nkeep-bottom' },
+        { label: 'B', content: 'keep-top\nunrelatedField: 9\nkeep-bottom' }
+    ]);
+
+    const rows = collectWindow(tab, 0, 5);
+    assert.deepEqual(rows.map((row) => row.map((cell) => cell.missing ? 'M' : cell.text)), [
+        ['keep-top', 'keep-top'],
+        ['firstField: 1', 'M'],
+        ['secondField: 2', 'M'],
+        ['thirdField: 3', 'M'],
+        ['M', 'unrelatedField: 9'],
+        ['keep-bottom', 'keep-bottom']
+    ]);
+});
+
+test('a value cleared down to a blank line pairs with its old content instead of splitting into missing rows', () => {
+    // isStructuralLine (blank, or bracket/comma-only lines) used to force a
+    // pairing score of 0 whenever the two lines were not identical, with no
+    // exception - so clearing a line's content down to blank always showed
+    // up as a delete row plus a separate insert row, even with matching
+    // counts on both sides where a plain positional pairing (what a
+    // side-by-side alignment like Diffuse's would show) is clearly right.
+    const tab = createTabFromContents([
+        { label: 'A', content: 'wrapper({\n    value: "some data"\n});' },
+        { label: 'B', content: 'wrapper({\n\n});' }
+    ]);
+
+    const rows = collectWindow(tab, 0, 2);
+    assert.deepEqual(rows.map((row) => row.map((cell) => cell.missing ? 'M' : cell.text)), [
+        ['wrapper({', 'wrapper({'],
+        ['    value: "some data"', ''],
+        ['});', '});']
+    ]);
+});
+
 test('the shared reference anchor is picked by content similarity, not by position, so one outlier pane does not make the rest look changed', () => {
     // The previous anchor heuristic only looked at index distance from the
     // middle pane, so a genuine outlier sitting at the positionally-middle
@@ -439,6 +481,94 @@ test('the shared reference anchor is picked by content similarity, not by positi
         tab.rows.filter((row) => row.cells[paneIndex].missing).length
     );
     assert.deepEqual(missingCountsByPane, [8, 8, 6, 8, 8]);
+});
+
+test('a line moved inside a comment wrapper pairs with its own uncommented self, not an unrelated line sharing the wrapper', () => {
+    // Prefix/suffix similarity breaks the instant an edit shifts everything
+    // after it - wrapping a line in "<!-- -->" moves every character over,
+    // so the (previously used) shared-prefix/shared-suffix score saw almost
+    // no overlap and lost to an unrelated line that merely happened to open
+    // and close with the same comment syntax. A longest-common-substring
+    // based score finds the real match regardless of where it sits.
+    const tab = createTabFromContents([
+        {
+            label: 'before.html',
+            content: [
+                'before-context',
+                '\t<!-- <a href="https://one.example.com/page/path/here">link one</a> -->',
+                '\t<a href="https://two.example.org/page/path/here">link two</a>',
+                'after-context'
+            ].join('\n')
+        },
+        {
+            label: 'after.html',
+            content: [
+                'before-context',
+                '\t<a href="https://one.example.com/page/path/here">link one</a>',
+                '\t<!-- <a href="https://two.example.org/page/path/here">link two</a> -->',
+                'after-context'
+            ].join('\n')
+        }
+    ]);
+
+    const rows = collectWindow(tab, 0, 3);
+    assert.ok(rows[1].every((cell) => !cell.missing));
+    assert.ok(rows[1][0].text.includes('one.example.com'));
+    assert.ok(rows[1][1].text.includes('one.example.com'));
+    assert.ok(rows[2].every((cell) => !cell.missing));
+    assert.ok(rows[2][0].text.includes('two.example.org'));
+    assert.ok(rows[2][1].text.includes('two.example.org'));
+});
+
+test('inline diff highlights only the comment wrapper, leaving the untouched side unhighlighted entirely', () => {
+    // getCharacterDifferenceRanges legitimately returns an empty array when a
+    // side has zero real differences (it is a pure substring of the other,
+    // as happens when a line is only wrapped in "<!-- -->"). getDifferenceRanges
+    // used to treat that empty result the same as "couldn't compute" and
+    // fall back to highlighting the entire line - so the untouched side of a
+    // comment toggle lit up almost end to end instead of staying clean.
+    const commented = '\t<!-- <a href="https://one.example.com/page/path/here">link one</a> -->';
+    const active = '\t<a href="https://one.example.com/page/path/here">link one</a>';
+
+    const commentedRanges = DifferenceInlineDiff.getDifferenceRanges(commented, active);
+    assert.deepEqual(commentedRanges.map((range) => commented.slice(range.start, range.end)), ['<!-- ', ' -->']);
+
+    assert.deepEqual(DifferenceInlineDiff.getDifferenceRanges(active, commented), []);
+});
+
+test('inline diff does not let a coincidental shared character misalign the real wrapper boundary', () => {
+    // A naive character-position prefix trim matches "commented[1]" ('<' of
+    // "<!--") against "active[1]" ('<' of "<a") just because they are both
+    // literally "<" - even though the real tag's own opening "<" is actually
+    // 5 characters further along in the commented version. That coincidence
+    // used to pull the tag's genuine "<" into the highlighted wrapper range.
+    const commented = '<!-- <a href="https://one.example.com/page/path/here">link one</a> -->';
+    const active = '<a href="https://one.example.com/page/path/here">link one</a>';
+
+    const ranges = DifferenceInlineDiff.getDifferenceRanges(commented, active);
+    assert.deepEqual(ranges.map((range) => commented.slice(range.start, range.end)), ['<!-- ', ' -->']);
+    assert.equal(commented.slice(ranges[0].end, ranges[0].end + 2), '<a');
+});
+
+test('inline diff does not merge an unchanged middle span into a changed token', () => {
+    // A greedy word/number tokenizer swallows "2.3" or "a82c" as one atomic
+    // token, so if only the ends of that token differ, the unchanged middle
+    // ("3", "82") used to get highlighted along with them. A longest-common-run
+    // based diff finds the real, finer-grained match instead.
+    const version = DifferenceInlineDiff.getDifferenceRanges('build v1.2.3.4', 'build v1.9.3.5');
+    assert.deepEqual(version.map((range) => 'build v1.2.3.4'.slice(range.start, range.end)), ['2', '4']);
+
+    const hex = DifferenceInlineDiff.getDifferenceRanges('color: #3fa82c', 'color: #3fb82d');
+    assert.deepEqual(hex.map((range) => 'color: #3fa82c'.slice(range.start, range.end)), ['a', 'c']);
+});
+
+test('inline diff keeps a changed emoji intact instead of splitting its surrogate pair', () => {
+    const source = 'status: good 👍';
+    const compare = 'status: good 👎';
+
+    const ranges = DifferenceInlineDiff.getDifferenceRanges(source, compare);
+    assert.equal(ranges.length, 1);
+    assert.equal(source.slice(ranges[0].start, ranges[0].end), '👍');
 });
 
 test('inline diff can highlight only the changed core of a similar word and leave the shared ending alone', () => {

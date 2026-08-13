@@ -628,6 +628,60 @@
         return length;
     }
 
+    const SUBSTRING_SIMILARITY_PRODUCT_LIMIT = 20000;
+
+    function getLongestCommonSubstringLength(leftText, rightText) {
+        const leftLength = leftText.length;
+        const rightLength = rightText.length;
+
+        if (!leftLength || !rightLength) {
+            return 0;
+        }
+
+        let previousRow = new Uint32Array(rightLength + 1);
+        let currentRow = new Uint32Array(rightLength + 1);
+        let longest = 0;
+
+        for (let leftIndex = leftLength - 1; leftIndex >= 0; leftIndex -= 1) {
+            for (let rightIndex = rightLength - 1; rightIndex >= 0; rightIndex -= 1) {
+                if (leftText[leftIndex] === rightText[rightIndex]) {
+                    const runLength = previousRow[rightIndex + 1] + 1;
+                    currentRow[rightIndex] = runLength;
+                    if (runLength > longest) {
+                        longest = runLength;
+                    }
+                } else {
+                    currentRow[rightIndex] = 0;
+                }
+            }
+
+            const swap = previousRow;
+            previousRow = currentRow;
+            currentRow = swap;
+        }
+
+        return longest;
+    }
+
+    function getTextSimilarity(leftText, rightText, sharedPrefix, sharedSuffix, denominator) {
+        if (leftText.length * rightText.length > SUBSTRING_SIMILARITY_PRODUCT_LIMIT) {
+            // Too expensive to run on very long lines; fall back to the
+            // cheaper (but shift-sensitive) prefix/suffix estimate.
+            return (sharedPrefix + sharedSuffix) / denominator;
+        }
+
+        // Prefix/suffix alone breaks the moment an edit shifts everything
+        // after it - wrapping a line in a comment, changing indentation,
+        // adding a short prefix - because the shared content is still there,
+        // just no longer sitting at the same character offsets. The longest
+        // common *substring* finds it regardless of position (a "wrap in
+        // <!-- -->" edit keeps one long contiguous run intact), while still
+        // requiring the overlap to be contiguous - unlike a subsequence,
+        // it isn't fooled by two short, unrelated words that merely happen
+        // to share a few scattered letters in order (e.g. "footer"/"others").
+        return getLongestCommonSubstringLength(leftText, rightText) / denominator;
+    }
+
     function getLeadingKeyToken(text) {
         if (typeof text !== 'string') {
             return '';
@@ -695,19 +749,36 @@
         }
 
         if (isStructuralLine(leftText) || isStructuralLine(rightText)) {
-            return 0;
+            // With mismatched counts there's no positional evidence a blank
+            // or bracket-only line corresponds to anything on the other
+            // side, so leave it as a clean delete/insert. With matching
+            // counts (e.g. a value cleared down to a blank line) a plain
+            // positional pairing is exactly what a side-by-side alignment
+            // like Diffuse's would show, so allow a weak pairing there too.
+            return allowWeakPairing ? 0.08 : 0;
         }
 
         const sharedPrefix = getSharedPrefixLength(leftText, rightText);
         const sharedSuffix = getSharedSuffixLength(leftText, rightText, sharedPrefix);
         const denominator = Math.max(leftText.length, rightText.length, 1);
-        const similarity = (sharedPrefix + sharedSuffix) / denominator;
+        const similarity = getTextSimilarity(leftText, rightText, sharedPrefix, sharedSuffix, denominator);
         const leftKey = getLeadingKeyToken(leftText);
         const rightKey = getLeadingKeyToken(rightText);
 
         if (leftKey && rightKey) {
             if (leftKey === rightKey) {
                 return Math.max(similarity, 0.6);
+            }
+
+            // A mismatched key is never strong enough evidence to force a
+            // pairing on its own - same rule as the generic weak-pairing
+            // floor below: only trust it when the block shape (equal
+            // counts) backs it up too. Otherwise even a coincidentally high
+            // raw similarity (two "key: value" lines sharing the ": " glue
+            // and part of the value) must not out-compete a clean
+            // delete/insert with no positional evidence at all.
+            if (!allowWeakPairing) {
+                return 0;
             }
 
             return Math.max(similarity * 0.35, 0.04);
