@@ -335,6 +335,76 @@ body {
 
 .folder-input {
   padding-right: 100px;
+  padding-left: 40px;
+}
+
+.folder-input-shell.is-dragging {
+  border-radius: 14px;
+  outline: 2px dashed rgba(52, 102, 196, 0.55);
+  outline-offset: -2px;
+  background: rgba(52, 102, 196, 0.06);
+}
+
+/* The row being dragged reads as an empty gap at its current slot - the
+   actual content follows the cursor as a floating ghost clone instead
+   (see .folder-drag-ghost). */
+.folder-input-shell.is-dragging > * {
+  visibility: hidden;
+}
+
+.folder-drag-ghost {
+  position: fixed;
+  z-index: 40;
+  pointer-events: none;
+  opacity: 0.94;
+  box-shadow: 0 16px 32px rgba(15, 23, 42, 0.24);
+  border-radius: 14px;
+}
+
+.folder-drag-handle {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  bottom: 6px;
+  width: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(173, 186, 207, 0.92);
+  border-radius: 12px;
+  background: #f6f9fd;
+  color: #7688a8;
+  cursor: grab;
+  transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.folder-drag-handle:hover {
+  border-color: rgba(86, 121, 188, 0.82);
+  background: #edf3ff;
+  color: #35558e;
+}
+
+.folder-drag-handle:active {
+  cursor: grabbing;
+}
+
+.folder-drag-handle:focus-visible {
+  outline: none;
+  border-color: rgba(52, 102, 196, 0.8);
+  box-shadow: 0 0 0 3px rgba(52, 102, 196, 0.14);
+}
+
+.folder-drag-handle svg {
+  display: block;
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+  /* The handle span itself must be the one and only element that ever
+     receives the mousedown/dragstart - never a child of it. */
+  pointer-events: none;
 }
 
 .folder-input:focus,

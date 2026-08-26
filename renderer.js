@@ -641,9 +641,350 @@ async function openFolderPickerForInput(input) {
     }
 }
 
+let draggedFolderShell = null;
+
+// The FLIP slide animation moves a row with a real CSS transform, so
+// getBoundingClientRect() reports its in-between (still sliding) position
+// for the whole ~160ms transition, not the row's actual resting spot -
+// checking "is the pointer inside this row" against that moving target is
+// exactly the kind of thing that reads as a flicker: the same row's box
+// keeps changing where it is on every check, purely due to its own
+// animation and independent of the pointer. Reading the row's *current*
+// rendered transform back out and subtracting it recovers the stable,
+// settled rect regardless of how far through the slide it is.
+function getSettledRect(shell) {
+    const rect = shell.getBoundingClientRect();
+    const computedTransform = getComputedStyle(shell).transform;
+
+    if (!computedTransform || computedTransform === 'none') {
+        return rect;
+    }
+
+    const match = computedTransform.match(/matrix\(([^)]+)\)/);
+    if (!match) {
+        return rect;
+    }
+
+    const values = match[1].split(',').map(value => parseFloat(value.trim()));
+    const translateX = values[4] || 0;
+    const translateY = values[5] || 0;
+
+    return {
+        left: rect.left - translateX,
+        right: rect.right - translateX,
+        top: rect.top - translateY,
+        bottom: rect.bottom - translateY
+    };
+}
+
+// The folder grid can lay rows out in more than one column, so "adjacent in
+// DOM order" is not the same thing as "adjacent on screen": moving one row
+// up within the same column skips over the item in the other column, i.e.
+// jumps by columnCount DOM positions, not by 1. Counting how many shells
+// share row 0's top position gives the current column count without
+// needing to parse grid-template-columns.
+function getFolderGridColumnCount(shells) {
+    if (!shells.length) {
+        return 1;
+    }
+
+    const firstTop = Math.round(getSettledRect(shells[0]).top);
+    let count = 0;
+
+    for (let index = 0; index < shells.length; index += 1) {
+        if (Math.round(getSettledRect(shells[index]).top) !== firstTop) {
+            break;
+        }
+        count += 1;
+    }
+
+    return Math.max(count, 1);
+}
+
+// Trades two DOM nodes' positions directly, leaving every other node's
+// position untouched - unlike insertBefore-ing one in front of the other,
+// which shifts everything in between by one slot too (fine for a single
+// column, but for a multi-column grid that shift can shuffle unrelated
+// rows into different columns as a side effect).
+function swapFolderShells(a, b) {
+    if (a === b) {
+        return;
+    }
+
+    const aNext = a.nextSibling;
+    const bNext = b.nextSibling;
+    const parent = a.parentNode;
+
+    if (aNext === b) {
+        parent.insertBefore(b, a);
+    } else if (bNext === a) {
+        parent.insertBefore(a, b);
+    } else {
+        parent.insertBefore(a, bNext);
+        parent.insertBefore(b, aNext);
+    }
+}
+
+function getRectCenter(rect) {
+    return { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 };
+}
+
+// A candidate has to bring the dragged row at least this much closer to the
+// pointer than staying put already is, before the diagonal fallback below
+// will take it - see that fallback for why.
+const FOLDER_DROP_FALLBACK_MARGIN_PX = 20;
+
+// Only ever step to a row that's a direct neighbor on screen - left, right,
+// up or down by one - never jump straight to "whichever of all N rows is
+// nearest". Jumping directly at a distant target is what actually caused
+// the glitch: a long drag would leapfrog several rows in one move, and the
+// very next check - now with a completely different layout around the
+// pointer - would often find a *different* row was actually the better
+// target and jump back, reading as the row bouncing between two spots
+// instead of sliding smoothly past each one in turn. Stepping to one
+// on-screen neighbor at a time avoids that by construction: there are only
+// ever up to four candidates, and swapping never disturbs anyone else.
+function trySwapFolderWithNeighbor(container, clientX, clientY) {
+    const shells = Array.from(container.querySelectorAll('.folder-input-shell'));
+    const draggedIndex = shells.indexOf(draggedFolderShell);
+
+    if (draggedIndex === -1) {
+        return false;
+    }
+
+    const columnCount = getFolderGridColumnCount(shells);
+    const candidateIndices = [
+        draggedIndex - columnCount,
+        draggedIndex + columnCount,
+        draggedIndex - 1,
+        draggedIndex + 1
+    ];
+
+    const candidates = candidateIndices
+        .map(index => shells[index])
+        .filter(shell => shell && shell !== draggedFolderShell);
+
+    if (!candidates.length) {
+        return false;
+    }
+
+    const isInside = shell => {
+        const rect = getSettledRect(shell);
+        return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+    };
+
+    let target = candidates.find(isInside) || null;
+
+    if (!target) {
+        // Moving diagonally, the pointer often isn't strictly inside any of
+        // the four neighbors at all - it can cross straight through the
+        // "+"-shaped gap where they all meet - so step toward whichever
+        // neighbor is nearest instead of getting stuck there. Two different
+        // near-ties have to be guarded against here, not just one:
+        //   - the nearest neighbor barely beating the *second*-nearest one
+        //     (right at the point where two neighbors meet, a pixel of
+        //     jitter flips which one "wins", so require a clear margin
+        //     over the runner-up); and
+        //   - the nearest neighbor barely beating the dragged row's *own*
+        //     current spot (once the row has already arrived under the
+        //     pointer, its own position isn't offered as a candidate here,
+        //     but a neighbor a full cell-height or cell-width away can
+        //     still look "closer to the pointer than its sibling" while
+        //     being no improvement - or actively worse - than just staying
+        //     put, which would yank the row back out right after it lands).
+        // Both have to hold: a real improvement over sitting still, and an
+        // unambiguous winner among the neighbors.
+        const ownCenter = getRectCenter(getSettledRect(draggedFolderShell));
+        const ownDistance = Math.hypot(clientX - ownCenter.x, clientY - ownCenter.y);
+
+        const ranked = candidates
+            .map(shell => {
+                const center = getRectCenter(getSettledRect(shell));
+                return { shell, distance: Math.hypot(clientX - center.x, clientY - center.y) };
+            })
+            .sort((a, b) => a.distance - b.distance);
+
+        const best = ranked[0];
+        const runnerUp = ranked[1];
+
+        if (
+            best &&
+            best.distance <= ownDistance - FOLDER_DROP_FALLBACK_MARGIN_PX &&
+            (!runnerUp || best.distance <= runnerUp.distance - FOLDER_DROP_FALLBACK_MARGIN_PX)
+        ) {
+            target = best.shell;
+        }
+    }
+
+    if (!target) {
+        return false;
+    }
+
+    swapFolderShells(draggedFolderShell, target);
+    return true;
+}
+
+// A single pointermove can easily have crossed several rows at once (a fast
+// flick, or just a coarse mouse-move step) - stepping to only the immediate
+// neighbor once per event would "lose" the pointer in that case and never
+// catch back up. Re-checking the (now different) immediate neighbor right
+// after each swap, in the same event, lets the dragged row walk as many
+// rows as it needs to in one go while still only ever considering its
+// current neighbor - never a distant "nearest of all" jump.
+function walkFolderTowardPointer(container, clientX, clientY) {
+    const shells = container.querySelectorAll('.folder-input-shell');
+    let moved = false;
+
+    for (let step = 0; step < shells.length; step += 1) {
+        if (!trySwapFolderWithNeighbor(container, clientX, clientY)) {
+            break;
+        }
+        moved = true;
+    }
+
+    return moved;
+}
+
+const FOLDER_REORDER_ANIMATION_MS = 160;
+
+// Runs moveFn (a synchronous DOM reorder) and animates every folder row that
+// ended up somewhere else, so the list visibly slides into its new order
+// instead of snapping - the standard FLIP technique (capture position,
+// move, then animate the visual delta back to zero on the next frame).
+function animateFolderReorder(moveFn) {
+    const container = getFoldersContainer();
+    const shells = Array.from(container.querySelectorAll('.folder-input-shell'));
+    const firstRects = new Map(shells.map(shell => [shell, shell.getBoundingClientRect()]));
+
+    moveFn();
+
+    shells.forEach(shell => {
+        const first = firstRects.get(shell);
+        const last = shell.getBoundingClientRect();
+        const dx = first.left - last.left;
+        const dy = first.top - last.top;
+
+        if (!dx && !dy) {
+            return;
+        }
+
+        shell.style.transition = 'none';
+        shell.style.transform = `translate(${dx}px, ${dy}px)`;
+
+        requestAnimationFrame(() => {
+            shell.style.transition = `transform ${FOLDER_REORDER_ANIMATION_MS}ms ease`;
+            shell.style.transform = '';
+            shell.addEventListener('transitionend', () => {
+                shell.style.transition = '';
+            }, { once: true });
+        });
+    });
+}
+
+// A floating clone that tracks the pointer, standing in for the native drag
+// ghost image a real HTML5 drag would normally provide.
+function createFolderDragGhost(wrapper, clientX, clientY) {
+    const rect = wrapper.getBoundingClientRect();
+    const ghost = wrapper.cloneNode(true);
+    ghost.classList.remove('is-dragging');
+    ghost.classList.add('folder-drag-ghost');
+    ghost.style.width = `${rect.width}px`;
+    ghost.style.height = `${rect.height}px`;
+    ghost.style.left = `${rect.left}px`;
+    ghost.style.top = `${rect.top}px`;
+    ghost.dataset.offsetX = clientX - rect.left;
+    ghost.dataset.offsetY = clientY - rect.top;
+    document.body.appendChild(ghost);
+    return ghost;
+}
+
+function updateFolderDragGhost(ghost, clientX, clientY) {
+    const offsetX = Number(ghost.dataset.offsetX) || 0;
+    const offsetY = Number(ghost.dataset.offsetY) || 0;
+    ghost.style.left = `${clientX - offsetX}px`;
+    ghost.style.top = `${clientY - offsetY}px`;
+}
+
+function removeFolderDragGhost(ghost) {
+    ghost.remove();
+}
+
 function createFolderInputField(value = '') {
     const wrapper = document.createElement('div');
     wrapper.className = 'folder-input-shell';
+
+    // Native HTML5 drag-and-drop (draggable + dragstart) turned out not to
+    // fire at all in some real-world setups here, with no error and every
+    // attribute set correctly - rather than chase that further, this drags
+    // with plain Pointer Events instead, which don't depend on the browser's
+    // native drag-gesture recognition at all and always fire reliably.
+    const dragHandle = document.createElement('span');
+    dragHandle.className = 'folder-drag-handle';
+    dragHandle.title = 'Drag to reorder this folder';
+    dragHandle.setAttribute('role', 'button');
+    dragHandle.setAttribute('aria-label', 'Drag to reorder this folder');
+    dragHandle.tabIndex = 0;
+    dragHandle.innerHTML = `
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <circle cx="9" cy="6" r="1.6"/>
+            <circle cx="15" cy="6" r="1.6"/>
+            <circle cx="9" cy="12" r="1.6"/>
+            <circle cx="15" cy="12" r="1.6"/>
+            <circle cx="9" cy="18" r="1.6"/>
+            <circle cx="15" cy="18" r="1.6"/>
+        </svg>
+    `;
+    dragHandle.addEventListener('pointerdown', event => {
+        if ((event.button !== undefined && event.button !== 0) || draggedFolderShell) {
+            return;
+        }
+
+        event.preventDefault();
+        draggedFolderShell = wrapper;
+        wrapper.classList.add('is-dragging');
+
+        const ghost = createFolderDragGhost(wrapper, event.clientX, event.clientY);
+
+        const handlePointerMove = moveEvent => {
+            updateFolderDragGhost(ghost, moveEvent.clientX, moveEvent.clientY);
+
+            // The raw pointer position, not the ghost's center: with
+            // adjacent-only swapping the question is "has the pointer
+            // crossed into the neighbor's territory", and the pointer is
+            // the actual thing being moved. The ghost is a whole-row-sized
+            // card grabbed near its left edge, so its center trails the
+            // real pointer by a big chunk of the row's width - far enough
+            // that it could still read as "inside the original column"
+            // long after the pointer itself had clearly crossed over.
+            const container = getFoldersContainer();
+
+            animateFolderReorder(() => {
+                walkFolderTowardPointer(container, moveEvent.clientX, moveEvent.clientY);
+            });
+        };
+
+        const finishDrag = () => {
+            document.removeEventListener('pointermove', handlePointerMove);
+            document.removeEventListener('pointerup', finishDrag);
+            document.removeEventListener('pointercancel', finishDrag);
+
+            removeFolderDragGhost(ghost);
+            wrapper.classList.remove('is-dragging');
+            wrapper.style.transition = '';
+            wrapper.style.transform = '';
+            draggedFolderShell = null;
+            refreshFolderInputPlaceholders();
+        };
+
+        // Listening on document (not on dragHandle/setPointerCapture) is
+        // deliberate: the dragged element itself gets reparented mid-drag
+        // by the live-reorder insertBefore below, and moving an element
+        // that currently holds pointer capture can silently drop it -
+        // document never moves, so it keeps receiving events regardless.
+        document.addEventListener('pointermove', handlePointerMove);
+        document.addEventListener('pointerup', finishDrag);
+        document.addEventListener('pointercancel', finishDrag);
+    });
 
     const input = document.createElement('input');
     input.type = 'text';
@@ -654,6 +995,11 @@ function createFolderInputField(value = '') {
     input.spellcheck = false;
     input.addEventListener('input', () => {
         input.title = input.value.trim();
+    });
+
+    wrapper.addEventListener('contextmenu', event => {
+        event.preventDefault();
+        window.api.showFolderContextMenu(input.value.trim());
     });
 
     const actions = document.createElement('div');
@@ -692,6 +1038,7 @@ function createFolderInputField(value = '') {
         openFolderPickerForInput(input);
     });
 
+    wrapper.appendChild(dragHandle);
     wrapper.appendChild(input);
     actions.appendChild(pickerButton);
     actions.appendChild(removeButton);
@@ -2754,6 +3101,14 @@ document.getElementById('addFolderBtn').addEventListener('click', async () => {
     const input = appendFolderInputField('');
     await openFolderPickerForInput(input);
 });
+
+// Electron's default behavior for an unhandled dragover/drop is to let
+// Chromium navigate the window to whatever was "dropped" - normally meant
+// for files dragged in from outside the app. The folder-row reorder itself
+// is handled entirely through Pointer Events (see createFolderInputField),
+// this is just a safety net against that unrelated default behavior.
+document.addEventListener('dragover', event => event.preventDefault());
+document.addEventListener('drop', event => event.preventDefault());
 
 document.getElementById('loadConfigBtn').addEventListener('click', () => loadConfig());
 document.getElementById('saveConfigBtn').addEventListener('click', () => saveConfig());

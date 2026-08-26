@@ -3401,6 +3401,13 @@
 
             const wasDirty = tab.panes.some(pane => pane.dirty);
             this.pushUndoSnapshot(tab);
+
+            // Captured before the rebuild reshuffles every row: which
+            // target-pane line numbers the pasted content will land on, so
+            // the selection can be restored by searching the rebuilt rows
+            // for that line range (see resolveSelectionAfterReplacement).
+            const insertionRange = window.DifferenceEngine.getReplacementRange(tab.rows, paneIndex, startRow, endRow);
+
             const currentPane = tab.panes[paneIndex];
             tab.panes[paneIndex] = {
                 ...window.DifferenceEngine.replacePaneSelection(tab, paneIndex, startRow, endRow, replacementLines),
@@ -3411,21 +3418,13 @@
             this.syncTabDirtyState(tab);
             window.DifferenceEngine.rebuildTab(tab);
 
-            if (tab.rows.length) {
-                const maxRow = Math.max(tab.rows.length - 1, 0);
-                const nextStart = clamp(startRow, 0, maxRow);
-                const nextEnd = clamp(startRow + Math.max(replacementLines.length - 1, 0), nextStart, maxRow);
-
-                tab.selection = {
-                    paneIndex,
-                    startRow: nextStart,
-                    endRow: nextEnd,
-                    anchorRow: nextStart,
-                    activeRow: nextEnd
-                };
-            } else {
-                tab.selection = null;
-            }
+            tab.selection = window.DifferenceEngine.resolveSelectionAfterReplacement(
+                tab.rows,
+                paneIndex,
+                insertionRange.startLine,
+                replacementLines.length,
+                startRow
+            );
 
             this.persistTabs();
             this.setStatus(description, true);

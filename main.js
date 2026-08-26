@@ -1,4 +1,4 @@
-﻿const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+﻿const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
@@ -44,6 +44,124 @@ function resolveDiffuseExecutable(forceRefresh = false) {
 
     return diffuseAvailabilityPromise;
 }
+
+let vscodeExecutablePath = null;
+let vscodeAvailabilityPromise = null;
+
+function getVSCodeFallbackPaths() {
+    if (process.platform !== 'win32') {
+        return [];
+    }
+
+    return [
+        process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs', 'Microsoft VS Code', 'bin', 'code.cmd'),
+        process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Microsoft VS Code', 'bin', 'code.cmd'),
+        process.env['ProgramFiles(x86)'] && path.join(process.env['ProgramFiles(x86)'], 'Microsoft VS Code', 'bin', 'code.cmd')
+    ].filter(Boolean);
+}
+
+function resolveVSCodeExecutable(forceRefresh = false) {
+    if (vscodeExecutablePath && !forceRefresh) {
+        return Promise.resolve(vscodeExecutablePath);
+    }
+
+    if (vscodeAvailabilityPromise && !forceRefresh) {
+        return vscodeAvailabilityPromise;
+    }
+
+    vscodeAvailabilityPromise = new Promise((resolve) => {
+        const command = process.platform === 'win32' ? 'where.exe' : 'which';
+        execFile(command, ['code'], { windowsHide: true }, (error, stdout) => {
+            const lines = !error
+                ? String(stdout || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+                : [];
+
+            // where.exe lists every PATH match, including the extension-less
+            // "code" shim meant for WSL/Git-Bash alongside the real "code.cmd"
+            // launcher - cmd.exe can't run the former directly, so prefer a
+            // Windows-executable extension when one is present.
+            const resolvedPath = process.platform === 'win32'
+                ? (lines.find((line) => /\.(cmd|exe|bat)$/i.test(line)) || lines[0] || null)
+                : (lines[0] || null);
+
+            // "code" not being on PATH doesn't mean VS Code isn't installed -
+            // the "Add to PATH" step during setup is easy to have skipped, so
+            // fall back to the default per-user/system install locations
+            // before giving up.
+            vscodeExecutablePath = resolvedPath || getVSCodeFallbackPaths().find(candidate => fs.existsSync(candidate)) || null;
+            vscodeAvailabilityPromise = null;
+            resolve(vscodeExecutablePath);
+        });
+    });
+
+    return vscodeAvailabilityPromise;
+}
+
+async function openPathInVSCode(targetPath) {
+    const vscodePath = await resolveVSCodeExecutable();
+
+    if (!vscodePath) {
+        throw new Error('VS Code was not found. Make sure "code" is on PATH, or that VS Code is installed in its default location.');
+    }
+
+    return new Promise((resolve, reject) => {
+        // shell:true on Windows runs this through cmd.exe, which splits an
+        // unquoted path at its first space - VS Code's own default install
+        // path ("...\Microsoft VS Code\bin\code.cmd") has one, so the
+        // executable and the target folder need to be quoted as part of a
+        // single command string rather than passed as separate args.
+        const command = `"${vscodePath}" "${targetPath}"`;
+        const proc = spawn(command, {
+            detached: true,
+            stdio: ['ignore', 'ignore', 'pipe'],
+            shell: true
+        });
+
+        let stderr = '';
+        proc.stderr.on('data', (chunk) => {
+            stderr += chunk;
+        });
+
+        proc.once('error', (error) => {
+            reject(new Error('Could not start VS Code: ' + error.message));
+        });
+
+        // The "code" CLI hands off to the real editor process and exits
+        // almost immediately either way - waiting for that exit (rather
+        // than just the initial spawn) is what actually confirms the
+        // command ran successfully instead of failing silently underneath
+        // stdio:'ignore'.
+        proc.once('exit', (code) => {
+            proc.unref();
+
+            if (code === 0) {
+                resolve({ success: true });
+                return;
+            }
+
+            reject(new Error(stderr.trim() || `VS Code exited with code ${code}.`));
+        });
+    });
+}
+
+ipcMain.on('show-folder-context-menu', (event, folderPath) => {
+    const browserWindow = BrowserWindow.fromWebContents(event.sender);
+    const trimmedPath = String(folderPath || '').trim();
+
+    const menu = Menu.buildFromTemplate([
+        {
+            label: 'Open in VS Code',
+            enabled: Boolean(trimmedPath),
+            click: () => {
+                openPathInVSCode(trimmedPath).catch(err => {
+                    dialog.showErrorBox('Could not open VS Code', err.message);
+                });
+            }
+        }
+    ]);
+
+    menu.popup({ window: browserWindow });
+});
 
 function createWindow() {
     const win = new BrowserWindow({
@@ -931,7 +1049,10 @@ ipcMain.handle('pick-folder', async (event, initialPath) => {
 ipcMain.handle('load-config', async () => {
     const result = await dialog.showOpenDialog({
         properties: ['openFile'],
-        filters: [{ name: 'JSON', extensions: ['json'] }]
+        filters: [
+            { name: 'JSON', extensions: ['json'] },
+            { name: 'All Files', extensions: ['*'] }
+        ]
     });
 
     if (result.canceled) return null;

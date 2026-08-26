@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('api', {
     loadConfig: () => ipcRenderer.invoke('load-config'),
     saveConfig: (data) => ipcRenderer.invoke('save-config', data),
     runCommand: (data) => ipcRenderer.invoke('run-command', data),
+    showFolderContextMenu: (folderPath) => ipcRenderer.send('show-folder-context-menu', folderPath),
     copyFolder: (data) => ipcRenderer.invoke('copy-folder', data),
     deleteFolder: (path) => ipcRenderer.invoke('delete-folder', path),
     runMainActions: (actions) => ipcRenderer.invoke('run-main-actions', actions),

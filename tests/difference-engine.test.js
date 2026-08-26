@@ -340,6 +340,44 @@ test('copying over existing target rows keeps a one-to-one replacement without i
     ]);
 });
 
+test('restoring selection after a transfer recovers a row still missing because of a third pane', () => {
+    // Pane A has no line for "GAP"; B and C both do. Selecting the whole
+    // block on A therefore spans 10 rows even though A itself only has 9
+    // real lines in it. Copying that selection into B (which already has
+    // the GAP line) can only transfer the 9 lines A actually has - but C
+    // still holds "GAP", so after the rebuild there's still a row where
+    // *both* A and B are missing it. The restored selection should follow
+    // B's own line numbers to that rebuilt row, not assume the pasted
+    // block is exactly 9 rows tall.
+    const tab = createTabFromContents([
+        { label: 'A', content: 'l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9' },
+        { label: 'B', content: 'l1\nl2\nl3\nl4\nGAP\nl5\nl6\nl7\nl8\nl9' },
+        { label: 'C', content: 'l1\nl2\nl3\nl4\nGAP\nl5\nl6\nl7\nl8\nl9' }
+    ]);
+
+    const startRow = 0;
+    const endRow = findRowIndex(tab, 'l9', 1);
+    assert.equal(endRow - startRow + 1, 10);
+
+    const insertionRange = DifferenceEngine.getReplacementRange(tab.rows, 1, startRow, endRow);
+    const transferred = DifferenceTransfer.getTransferLinesFromPane(tab, 0, 1, startRow, endRow);
+    assert.equal(transferred.length, 9);
+
+    tab.panes[1] = DifferenceEngine.replacePaneSelection(tab, 1, startRow, endRow, transferred);
+    rebuildTab(tab);
+
+    const selection = DifferenceEngine.resolveSelectionAfterReplacement(
+        tab.rows,
+        1,
+        insertionRange.startLine,
+        transferred.length,
+        startRow
+    );
+
+    assert.equal(selection.startRow, 0);
+    assert.equal(selection.endRow, 9);
+});
+
 test('a block moved past repeated boilerplate lines stays contiguous instead of crossing (patience-first diff)', () => {
     // Diffuse never falls back to a plain LCS pass: an unconstrained LCS is
     // free to match a common-but-non-unique line (here "pass" and the blank

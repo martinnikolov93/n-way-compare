@@ -1369,10 +1369,69 @@
         return getSelectedLines(rows, paneIndex, startRow, endRow).length > 0;
     }
 
+    function findRowIndexForLineNumber(rows, paneIndex, lineNumber, fromIndex = 0) {
+        for (let rowIndex = fromIndex; rowIndex < rows.length; rowIndex += 1) {
+            if (rows[rowIndex]?.cells?.[paneIndex]?.lineNumber === lineNumber) {
+                return rowIndex;
+            }
+        }
+
+        return -1;
+    }
+
+    // After a replacement + rebuild, the pasted block can't be reselected by
+    // just assuming it spans `replacementLineCount` rows starting at the old
+    // startRow: a selected block can straddle a row that's "Missing in this
+    // file" for the pane being copied *from*, which drops out of the actual
+    // transfer, so the pasted content is shorter than the row span the user
+    // dragged out. But if another pane still holds content that justified
+    // that gap, the rebuild still carries a gap row for it - just now
+    // sitting inside the *target* pane's freshly written lines instead of
+    // the source's. Re-finding the pasted range by the target pane's own
+    // line numbers (rather than by row-count arithmetic) recovers that gap
+    // row automatically, so the restored selection matches the block the
+    // user actually meant to keep moving.
+    function resolveSelectionAfterReplacement(rows, paneIndex, insertionStartLine, replacementLineCount, fallbackStartRow) {
+        if (!rows.length) {
+            return null;
+        }
+
+        const maxRow = Math.max(rows.length - 1, 0);
+        let nextStart = Math.min(Math.max(fallbackStartRow, 0), maxRow);
+        let nextEnd = nextStart;
+
+        if (replacementLineCount) {
+            const firstLineNumber = insertionStartLine + 1;
+            const lastLineNumber = insertionStartLine + replacementLineCount;
+            const firstRowIndex = findRowIndexForLineNumber(rows, paneIndex, firstLineNumber);
+            const lastRowIndex = firstRowIndex === -1
+                ? -1
+                : findRowIndexForLineNumber(rows, paneIndex, lastLineNumber, firstRowIndex);
+
+            if (firstRowIndex !== -1 && lastRowIndex !== -1) {
+                nextStart = firstRowIndex;
+                nextEnd = lastRowIndex;
+            } else {
+                nextEnd = Math.min(Math.max(nextStart, fallbackStartRow + replacementLineCount - 1), maxRow);
+            }
+        }
+
+        return {
+            paneIndex,
+            startRow: nextStart,
+            endRow: nextEnd,
+            anchorRow: nextStart,
+            activeRow: nextEnd
+        };
+    }
+
     window.DifferenceEngine = {
         rebuildTab,
         getSelectedLines,
+        getReplacementRange,
         replacePaneSelection,
-        selectionHasContent
+        selectionHasContent,
+        findRowIndexForLineNumber,
+        resolveSelectionAfterReplacement
     };
 })();
