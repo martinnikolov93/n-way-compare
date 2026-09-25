@@ -19,6 +19,18 @@
         '.avif': 'image/avif'
     });
 
+    const AUDIO_EXTENSION_TO_MIME = Object.freeze({
+        '.mp3': 'audio/mpeg',
+        '.wav': 'audio/wav',
+        '.ogg': 'audio/ogg',
+        '.oga': 'audio/ogg',
+        '.opus': 'audio/opus',
+        '.m4a': 'audio/mp4',
+        '.aac': 'audio/aac',
+        '.flac': 'audio/flac',
+        '.weba': 'audio/webm'
+    });
+
     function getFileExtension(filePath) {
         const normalizedPath = String(filePath || '')
             .trim()
@@ -32,14 +44,21 @@
         return Boolean(IMAGE_EXTENSION_TO_MIME[getFileExtension(filePath)]);
     }
 
+    function isAudioFilePath(filePath) {
+        return Boolean(AUDIO_EXTENSION_TO_MIME[getFileExtension(filePath)]);
+    }
+
     function getMimeTypeForFilePath(filePath) {
-        return IMAGE_EXTENSION_TO_MIME[getFileExtension(filePath)] || 'application/octet-stream';
+        const extension = getFileExtension(filePath);
+        return IMAGE_EXTENSION_TO_MIME[extension] || AUDIO_EXTENSION_TO_MIME[extension] || 'application/octet-stream';
     }
 
     return {
         IMAGE_EXTENSION_TO_MIME,
+        AUDIO_EXTENSION_TO_MIME,
         getFileExtension,
         isImageFilePath,
+        isAudioFilePath,
         getMimeTypeForFilePath
     };
 });

@@ -1845,6 +1845,53 @@ function fileEntriesDiffer(entries) {
     return new Set(hashes).size > 1;
 }
 
+// Reuses the per-folder "comparable" hash the scanner already computed for
+// every file (see getSmartHashes in main.js) - grouping folders that share a
+// differing file is just bucketing those existing hash strings, not extra
+// hashing or file reads, so it's effectively free compared to the scan
+// itself. This is deliberately the whitespace-insensitive comparableHash,
+// not the raw byte hash used for the "Diff"/"Synced" status: two files that
+// differ only in per-line leading/trailing whitespace never get highlighted
+// by the difference viewer either, so grouping them apart would show a
+// split the viewer itself doesn't back up. Folders missing the file
+// entirely are left out (null) rather than treated as their own group -
+// that's already conveyed by the "Missing" status, and folding it into
+// "content groups" would just make an otherwise-identical file look like it
+// has multiple variants.
+function computeFileContentGroups(entries) {
+    const hashToGroup = new Map();
+
+    return dirs.map((_, index) => {
+        const entry = entries?.[index];
+        if (!entry) {
+            return null;
+        }
+
+        const hash = entry.comparableHash || entry.hash || '';
+        if (!hashToGroup.has(hash)) {
+            hashToGroup.set(hash, hashToGroup.size);
+        }
+
+        return hashToGroup.get(hash);
+    });
+}
+
+// Each row already knows exactly how many distinct groups it has, so its
+// hues can be spaced *evenly* across the usable (non-red) part of the color
+// wheel for that specific count, instead of relying on an open-ended
+// sequence (golden angle, golden ratio, ...) that's only asymptotically
+// well-spread and can land two colors close together for some small counts.
+// This never needs to stay consistent between different files - "Group 1"
+// on one row has no relation to "Group 1" on another - so recomputing the
+// spacing per row is exactly what's wanted.
+const GROUP_COLOR_HUE_START = 45;
+const GROUP_COLOR_HUE_SPAN = 270;
+
+function getGroupColor(groupIndex, totalGroups) {
+    const hue = GROUP_COLOR_HUE_START + (groupIndex * GROUP_COLOR_HUE_SPAN) / Math.max(totalGroups, 1);
+    return `hsl(${hue.toFixed(1)}, 62%, 40%)`;
+}
+
 function nodeHasDiff(node, diffCache = new Map()) {
     const cacheKey = node.__relativePath || '__root__';
 
@@ -2068,6 +2115,7 @@ function restoreRenderScrollState(state) {
 function render() {
     const list = document.getElementById('fileList');
     const onlyDiff = document.getElementById('onlyDiff').checked;
+    const groupingEnabled = document.getElementById('groupDiffs').checked;
     ensurePreservedScrollState();
     const scrollState = preservedScrollState;
     const nextChildren = document.createDocumentFragment();
@@ -2441,7 +2489,7 @@ function render() {
         return cell;
     }
 
-    function createFileSlot({ file, dir, dirIndex, entry, rowHasDiff, sourceName }) {
+    function createFileSlot({ file, dir, dirIndex, entry, rowHasDiff, sourceName, groupIndex = null, totalGroups = 0 }) {
         const { cell, surface } = createCompareCell('', 'compare-slot');
         const targetPath = entry?.path || buildFileTargetPath(dir, file);
 
@@ -2491,7 +2539,20 @@ function render() {
         controls.appendChild(createControlChip(radio, 'Source', !entry));
         controls.appendChild(createControlChip(checkbox, 'Target'));
 
-        surface.appendChild(status);
+        const statusRow = document.createElement('div');
+        statusRow.className = 'compare-slot-status-row';
+        statusRow.appendChild(status);
+
+        if (groupIndex !== null) {
+            const groupBadge = document.createElement('div');
+            groupBadge.className = 'compare-slot-group-badge';
+            groupBadge.textContent = 'Group ' + (groupIndex + 1);
+            groupBadge.style.background = getGroupColor(groupIndex, totalGroups);
+            groupBadge.title = 'Same background = identical content in this file across these folders';
+            statusRow.appendChild(groupBadge);
+        }
+
+        surface.appendChild(statusRow);
         surface.appendChild(controls);
         return cell;
     }
@@ -2523,6 +2584,17 @@ function render() {
 
         row.appendChild(fileNameCell.cell);
 
+        // Only worth computing (and only worth showing) when the row is
+        // already flagged as differing *and* that difference comes from at
+        // least two distinct content variants - not just some folders
+        // missing the file entirely, which the existing "Missing" status
+        // already conveys on its own.
+        const groupIndices = groupingEnabled && rowHasDiff ? computeFileContentGroups(entries) : null;
+        const distinctGroupCount = groupIndices
+            ? new Set(groupIndices.filter(groupIndex => groupIndex !== null)).size
+            : 0;
+        const showGroups = distinctGroupCount > 1;
+
         dirs.forEach((dir, dirIndex) => {
             row.appendChild(createFileSlot({
                 file,
@@ -2530,7 +2602,9 @@ function render() {
                 dirIndex,
                 entry: entries?.[dirIndex],
                 rowHasDiff,
-                sourceName: `file-${file}`
+                sourceName: `file-${file}`,
+                groupIndex: showGroups ? groupIndices[dirIndex] : null,
+                totalGroups: distinctGroupCount
             }));
         });
 
@@ -3017,6 +3091,7 @@ function render() {
 }
 
 document.getElementById('onlyDiff').onchange = render;
+document.getElementById('groupDiffs').onchange = render;
 
 async function loadConfig() {
     try {

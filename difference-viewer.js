@@ -13,6 +13,21 @@
         return Math.max(min, Math.min(max, value));
     }
 
+    // Same hue-generation scheme as the folder list's grouping badges
+    // (renderer.js), kept as its own copy here rather than a cross-file
+    // reference so this module doesn't depend on renderer.js's load order.
+    // Each tab already knows its own distinct group count, so hues are
+    // spaced evenly across that count instead of drawn from an open-ended
+    // sequence - see the longer comment next to this constant in
+    // renderer.js for why that's the more reliable choice.
+    const GROUP_COLOR_HUE_START = 45;
+    const GROUP_COLOR_HUE_SPAN = 270;
+
+    function getGroupColor(groupIndex, totalGroups) {
+        const hue = GROUP_COLOR_HUE_START + (groupIndex * GROUP_COLOR_HUE_SPAN) / Math.max(totalGroups, 1);
+        return `hsl(${hue.toFixed(1)}, 62%, 40%)`;
+    }
+
     function escapeHtml(text) {
         return text
             .replace(/&/g, '&amp;')
@@ -404,7 +419,7 @@
         }
 
         getReferencePaneIndex(tab) {
-            if (!tab || this.isImageTab(tab)) {
+            if (!tab || this.isMediaTab(tab)) {
                 return null;
             }
 
@@ -435,6 +450,10 @@
             return Boolean(window.DifferenceFileTypes?.isImageFilePath?.(filePath));
         }
 
+        isAudioFilePath(filePath) {
+            return Boolean(window.DifferenceFileTypes?.isAudioFilePath?.(filePath));
+        }
+
         getMimeTypeForFilePath(filePath) {
             return window.DifferenceFileTypes?.getMimeTypeForFilePath?.(filePath) || '';
         }
@@ -442,13 +461,100 @@
         getDescriptorMode(descriptor) {
             const panes = Array.isArray(descriptor?.panes) ? descriptor.panes : [];
 
-            return panes.length && panes.every((pane) => this.isImageFilePath(pane?.path))
-                ? 'image'
-                : 'text';
+            if (!panes.length) {
+                return 'text';
+            }
+
+            if (panes.every((pane) => this.isImageFilePath(pane?.path))) {
+                return 'image';
+            }
+
+            if (panes.every((pane) => this.isAudioFilePath(pane?.path))) {
+                return 'audio';
+            }
+
+            return 'text';
         }
 
         isImageTab(tab) {
             return tab?.mode === 'image';
+        }
+
+        isAudioTab(tab) {
+            return tab?.mode === 'audio';
+        }
+
+        // Both image and audio tabs are preview-only: no rows, no diffing,
+        // no reference mode, no inline editing. Most of the gating below
+        // cares about that broader "not diffable text" distinction rather
+        // than the exact media type, which only createImagePane/
+        // createAudioPane and the mode label itself need to tell apart.
+        isMediaTab(tab) {
+            return this.isImageTab(tab) || this.isAudioTab(tab);
+        }
+
+        isGroupingEnabled() {
+            const checkbox = document.getElementById('groupDiffs');
+            return checkbox ? checkbox.checked : true;
+        }
+
+        // Same per-line trim as normalizeComparableLine in difference-engine.js
+        // (the function that decides whether a row actually renders as
+        // changed). Grouping on raw text instead would split panes into
+        // separate groups purely over per-line whitespace - a difference the
+        // viewer itself never highlights - which reads as a contradiction:
+        // "these are 2 different groups" next to a grid with no red anywhere.
+        normalizeTextForGrouping(content) {
+            return String(content || '')
+                .replace(/\r\n/g, '\n')
+                .split('\n')
+                .map((line) => line.trim())
+                .join('\n')
+                .trim();
+        }
+
+        // Mirrors the folder list's content-based grouping (renderer.js),
+        // but keyed on each pane's current in-memory content rather than a
+        // precomputed on-disk hash, so it stays correct as panes are edited
+        // in this viewer. Panes missing on disk are left out (null) rather
+        // than treated as their own group - the header already shows
+        // "Missing on disk" for those.
+        computePaneContentGroups(tab) {
+            const keyToGroup = new Map();
+
+            const indices = tab.panes.map((pane) => {
+                if (!pane.exists) {
+                    return null;
+                }
+
+                const key = pane.kind === 'text' ? this.normalizeTextForGrouping(pane.content) : pane.mediaDataUrl;
+
+                if (!keyToGroup.has(key)) {
+                    keyToGroup.set(key, keyToGroup.size);
+                }
+
+                return keyToGroup.get(key);
+            });
+
+            const distinctGroupCount = new Set(indices.filter((index) => index !== null)).size;
+
+            return {
+                indices,
+                distinctGroupCount,
+                showGroups: distinctGroupCount > 1
+            };
+        }
+
+        // Computed once per render pass (not once per pane header - that
+        // would turn an O(panes) pass into O(panes^2)) and reused for every
+        // pane header in that pass.
+        getTabGroupIndices(tab) {
+            if (!this.isGroupingEnabled()) {
+                return null;
+            }
+
+            const contentGroups = this.computePaneContentGroups(tab);
+            return contentGroups.showGroups ? contentGroups : null;
         }
 
         getPaneStateText(tab, pane) {
@@ -457,7 +563,7 @@
             }
 
             if (this.hasPaneDiskConflict(pane)) {
-                return pane.dirty && !this.isImageTab(tab)
+                return pane.dirty && !this.isMediaTab(tab)
                     ? 'Changed on disk + local edits'
                     : 'Changed on disk';
             }
@@ -466,16 +572,16 @@
                 return 'Missing on disk';
             }
 
-            if (this.isImageTab(tab)) {
-                return 'Image preview only';
+            if (this.isMediaTab(tab)) {
+                return tab.mode === 'audio' ? 'Audio preview only' : 'Image preview only';
             }
 
             return pane.dirty ? 'Modified locally' : 'On disk';
         }
 
-        createPaneHeader(tab, pane, paneIndex) {
+        createPaneHeader(tab, pane, paneIndex, groupIndex = null, totalGroups = 0) {
             const header = document.createElement('div');
-            const imageTab = this.isImageTab(tab);
+            const mediaTab = this.isMediaTab(tab);
             const interactionLocked = this.tabHasInteractionLock(tab);
             const referencePane = this.isReferencePane(tab, paneIndex);
             const stickyPane = this.isStickyPane(tab, paneIndex);
@@ -489,15 +595,28 @@
             const labelRow = document.createElement('div');
             labelRow.className = 'difference-pane-label-row';
 
+            const labelGroup = document.createElement('div');
+            labelGroup.className = 'difference-pane-label-group';
+
             const label = document.createElement('div');
             label.className = 'difference-pane-label';
             label.textContent = pane.label;
+            labelGroup.appendChild(label);
+
+            if (groupIndex !== null) {
+                const groupBadge = document.createElement('div');
+                groupBadge.className = 'difference-pane-group-badge';
+                groupBadge.textContent = 'Group ' + (groupIndex + 1);
+                groupBadge.style.background = getGroupColor(groupIndex, totalGroups);
+                groupBadge.title = 'Same background = identical content across these panes';
+                labelGroup.appendChild(groupBadge);
+            }
 
             const actions = document.createElement('div');
             actions.className = 'difference-pane-actions';
 
             const referenceBtn = document.createElement('button');
-            const referenceDisabled = imageTab || interactionLocked || !pane.exists || Boolean(pane.error);
+            const referenceDisabled = mediaTab || interactionLocked || !pane.exists || Boolean(pane.error);
             referenceBtn.type = 'button';
             referenceBtn.className = 'difference-pane-btn' + (referenceDisabled ? ' is-disabled' : '');
             referenceBtn.textContent = referencePane ? 'Unset as reference' : 'Set as reference';
@@ -534,15 +653,15 @@
 
             const saveBtn = document.createElement('button');
             saveBtn.type = 'button';
-            saveBtn.className = 'difference-pane-btn' + (pane.dirty && !imageTab && !interactionLocked ? '' : ' is-disabled');
-            saveBtn.textContent = imageTab ? 'View' : (pane.dirty ? 'Save' : 'Saved');
-            saveBtn.title = imageTab
-                ? 'Image preview is read-only in this version'
+            saveBtn.className = 'difference-pane-btn' + (pane.dirty && !mediaTab && !interactionLocked ? '' : ' is-disabled');
+            saveBtn.textContent = mediaTab ? 'View' : (pane.dirty ? 'Save' : 'Saved');
+            saveBtn.title = mediaTab
+                ? 'Preview is read-only in this version'
                 : interactionLocked
                     ? 'Resolve pending viewer locks before saving'
                     : 'Save this file';
             saveBtn.addEventListener('click', () => {
-                if (imageTab || !pane.dirty || interactionLocked) {
+                if (mediaTab || !pane.dirty || interactionLocked) {
                     return;
                 }
 
@@ -554,7 +673,7 @@
             actions.appendChild(referenceBtn);
             actions.appendChild(stickyBtn);
             actions.appendChild(saveBtn);
-            labelRow.appendChild(label);
+            labelRow.appendChild(labelGroup);
             labelRow.appendChild(actions);
 
             const filePath = document.createElement('div');
@@ -566,7 +685,7 @@
             state.className = 'difference-pane-state' + (
                 this.hasPaneDiskConflict(pane)
                     ? ' is-warning'
-                    : (!imageTab && pane.dirty ? ' is-dirty' : '')
+                    : (!mediaTab && pane.dirty ? ' is-dirty' : '')
             );
             state.textContent = this.getPaneStateText(tab, pane);
 
@@ -872,7 +991,7 @@
                 return;
             }
 
-            if (this.isImageTab(tab)) {
+            if (this.isMediaTab(tab)) {
                 this.setStatus('Reference mode is only available for text comparisons.');
                 return;
             }
@@ -1405,11 +1524,11 @@
 
         async loadTab(descriptor, existingId = null) {
             const mode = this.getDescriptorMode(descriptor);
+            const isMedia = mode !== 'text';
             const fileResults = await this.api.readFiles(descriptor.panes.map(pane => pane.path));
             const panes = descriptor.panes.map((pane, index) => {
                 const result = fileResults[index] || {};
-                const imagePane = mode === 'image';
-                const textContent = imagePane ? '' : (result.content || '');
+                const textContent = isMedia ? '' : (result.content || '');
 
                 return {
                     path: pane.path,
@@ -1421,9 +1540,9 @@
                     error: result.error || '',
                     content: textContent,
                     savedContent: textContent,
-                    kind: imagePane ? 'image' : 'text',
-                    mimeType: imagePane ? (result.mimeType || this.getMimeTypeForFilePath(pane.path)) : '',
-                    imageDataUrl: imagePane ? (result.dataUrl || '') : '',
+                    kind: mode,
+                    mimeType: isMedia ? (result.mimeType || this.getMimeTypeForFilePath(pane.path)) : '',
+                    mediaDataUrl: isMedia ? (result.dataUrl || '') : '',
                     dirty: false
                 };
             });
@@ -1445,7 +1564,7 @@
                 history: this.createTabHistory()
             };
 
-            if (mode === 'image') {
+            if (isMedia) {
                 return tab;
             }
 
@@ -1544,7 +1663,7 @@
             }
 
             this.syncTabDirtyState(tab);
-            if (this.isImageTab(tab)) {
+            if (this.isMediaTab(tab)) {
                 tab.rows = [];
                 tab.hunks = [];
             } else {
@@ -1791,7 +1910,7 @@
             const refreshed = await this.loadTab(tab.descriptor, tab.id);
             refreshed.referencePaneIndex = this.getValidPaneIndex(refreshed, previousReferencePaneIndex);
             refreshed.stickyPaneIndex = this.getValidPaneIndex(refreshed, previousStickyPaneIndex);
-            if (refreshed.referencePaneIndex !== null && !this.isImageTab(refreshed)) {
+            if (refreshed.referencePaneIndex !== null && !this.isMediaTab(refreshed)) {
                 window.DifferenceEngine.rebuildTab(refreshed);
             }
             Object.assign(tab, refreshed);
@@ -1818,8 +1937,8 @@
                 return;
             }
 
-            if (this.isImageTab(tab)) {
-                this.setStatus('Image comparison is preview-only in this version.');
+            if (this.isMediaTab(tab)) {
+                this.setStatus('This comparison is preview-only in this version.');
                 return;
             }
 
@@ -1983,9 +2102,9 @@
             this.finishInlineEdit({ commit: true });
 
             const [result] = await this.api.readFiles([pane.path]);
-            const mode = this.isImageTab(tab) ? 'image' : 'text';
+            const isMedia = this.isMediaTab(tab);
             const nextExists = Boolean(result?.exists);
-            const nextContent = mode === 'image' ? '' : (result?.content || '');
+            const nextContent = isMedia ? '' : (result?.content || '');
 
             tab.panes[paneIndex] = {
                 ...pane,
@@ -1996,8 +2115,8 @@
                 error: result?.error || '',
                 content: nextContent,
                 savedContent: nextContent,
-                mimeType: mode === 'image' ? (result?.mimeType || this.getMimeTypeForFilePath(pane.path)) : '',
-                imageDataUrl: mode === 'image' ? (result?.dataUrl || '') : '',
+                mimeType: isMedia ? (result?.mimeType || this.getMimeTypeForFilePath(pane.path)) : '',
+                mediaDataUrl: isMedia ? (result?.dataUrl || '') : '',
                 lineHints: null
             };
 
@@ -2005,7 +2124,7 @@
             tab.history = this.createTabHistory();
             this.syncTabDirtyState(tab);
 
-            if (this.isImageTab(tab)) {
+            if (isMedia) {
                 tab.rows = [];
                 tab.hunks = [];
             } else {
@@ -2028,7 +2147,7 @@
 
             const [result] = await this.api.readFiles([pane.path]);
             pane.savedExists = Boolean(result?.exists);
-            pane.savedContent = this.isImageTab(tab) ? '' : (result?.content || '');
+            pane.savedContent = this.isMediaTab(tab) ? '' : (result?.content || '');
             pane.diskSnapshot = this.extractDiskSnapshot(result, pane.path);
             pane.error = result?.error || '';
             this.clearPaneDiskConflict(tab, paneIndex);
@@ -2638,9 +2757,9 @@
             this.updateOverviewViewport();
         }
 
-        createImagePane(tab, pane, paneIndex) {
+        createMediaPaneShell(tab, paneIndex) {
             const paneEl = document.createElement('div');
-            paneEl.className = 'difference-image-pane' +
+            paneEl.className = 'difference-media-pane' +
                 (paneIndex === tab.focusPaneIndex ? ' is-active' : '') +
                 (this.isStickyPane(tab, paneIndex) ? ' is-sticky-pane' : '');
             paneEl.style.minWidth = this.paneMinWidth + 'px';
@@ -2655,50 +2774,47 @@
             });
 
             const viewport = document.createElement('div');
-            viewport.className = 'difference-image-viewport';
+            viewport.className = 'difference-media-viewport';
 
             const meta = document.createElement('div');
-            meta.className = 'difference-image-meta';
+            meta.className = 'difference-media-meta';
+
+            return { paneEl, viewport, meta };
+        }
+
+        createMediaPlaceholder(viewport, title, detail) {
+            const placeholder = document.createElement('div');
+            placeholder.className = 'difference-media-placeholder';
+
+            const titleEl = document.createElement('div');
+            titleEl.className = 'difference-media-placeholder-title';
+            titleEl.textContent = title;
+
+            const detailEl = document.createElement('div');
+            detailEl.className = 'difference-media-placeholder-detail';
+            detailEl.textContent = detail;
+
+            placeholder.appendChild(titleEl);
+            placeholder.appendChild(detailEl);
+            viewport.appendChild(placeholder);
+        }
+
+        createImagePane(tab, pane, paneIndex) {
+            const { paneEl, viewport, meta } = this.createMediaPaneShell(tab, paneIndex);
 
             if (pane.error) {
-                const placeholder = document.createElement('div');
-                placeholder.className = 'difference-image-placeholder';
-
-                const title = document.createElement('div');
-                title.className = 'difference-image-placeholder-title';
-                title.textContent = 'Unable to load image';
-
-                const detail = document.createElement('div');
-                detail.className = 'difference-image-placeholder-detail';
-                detail.textContent = pane.error;
-
-                placeholder.appendChild(title);
-                placeholder.appendChild(detail);
-                viewport.appendChild(placeholder);
+                this.createMediaPlaceholder(viewport, 'Unable to load image', pane.error);
                 meta.textContent = 'Load error';
-            } else if (!pane.exists || !pane.imageDataUrl) {
-                const placeholder = document.createElement('div');
-                placeholder.className = 'difference-image-placeholder';
-
-                const title = document.createElement('div');
-                title.className = 'difference-image-placeholder-title';
-                title.textContent = 'Missing on disk';
-
-                const detail = document.createElement('div');
-                detail.className = 'difference-image-placeholder-detail';
-                detail.textContent = 'This target does not have the image file yet.';
-
-                placeholder.appendChild(title);
-                placeholder.appendChild(detail);
-                viewport.appendChild(placeholder);
+            } else if (!pane.exists || !pane.mediaDataUrl) {
+                this.createMediaPlaceholder(viewport, 'Missing on disk', 'This target does not have the image file yet.');
                 meta.textContent = 'No image available';
             } else {
                 const frame = document.createElement('div');
-                frame.className = 'difference-image-frame';
+                frame.className = 'difference-media-frame';
 
                 const image = document.createElement('img');
                 image.className = 'difference-image';
-                image.src = pane.imageDataUrl;
+                image.src = pane.mediaDataUrl;
                 image.alt = basename(pane.path);
                 image.decoding = 'async';
                 image.addEventListener('load', () => {
@@ -2720,8 +2836,54 @@
             return paneEl;
         }
 
+        createAudioPane(tab, pane, paneIndex) {
+            const { paneEl, viewport, meta } = this.createMediaPaneShell(tab, paneIndex);
+
+            if (pane.error) {
+                this.createMediaPlaceholder(viewport, 'Unable to load audio', pane.error);
+                meta.textContent = 'Load error';
+            } else if (!pane.exists || !pane.mediaDataUrl) {
+                this.createMediaPlaceholder(viewport, 'Missing on disk', 'This target does not have the audio file yet.');
+                meta.textContent = 'No audio available';
+            } else {
+                const frame = document.createElement('div');
+                frame.className = 'difference-media-frame';
+
+                const audio = document.createElement('audio');
+                audio.className = 'difference-audio';
+                audio.controls = true;
+                audio.preload = 'metadata';
+                audio.src = pane.mediaDataUrl;
+                audio.addEventListener('loadedmetadata', () => {
+                    const typeLabel = (pane.mimeType || this.getMimeTypeForFilePath(pane.path) || 'audio')
+                        .replace(/^audio\//, '')
+                        .toUpperCase();
+                    meta.textContent = Number.isFinite(audio.duration)
+                        ? `${typeLabel} ${this.formatAudioDuration(audio.duration)}`
+                        : typeLabel;
+                });
+
+                frame.appendChild(audio);
+                viewport.appendChild(frame);
+                meta.textContent = (pane.mimeType || this.getMimeTypeForFilePath(pane.path) || 'audio')
+                    .replace(/^audio\//, '')
+                    .toUpperCase();
+            }
+
+            paneEl.appendChild(viewport);
+            paneEl.appendChild(meta);
+            return paneEl;
+        }
+
+        formatAudioDuration(totalSeconds) {
+            const seconds = Math.max(0, Math.round(totalSeconds));
+            const minutes = Math.floor(seconds / 60);
+            const remainder = seconds % 60;
+            return `${minutes}:${String(remainder).padStart(2, '0')}`;
+        }
+
         getDiskChangeOverlayTitle(tab, pane) {
-            if (!this.isImageTab(tab) && pane.dirty) {
+            if (!this.isMediaTab(tab) && pane.dirty) {
                 return 'This file changed on disk and also has unsaved changes here.';
             }
 
@@ -2729,12 +2891,12 @@
         }
 
         getDiskChangeOverlayDetail(tab, pane) {
-            if (!this.isImageTab(tab) && pane.dirty) {
+            if (!this.isMediaTab(tab) && pane.dirty) {
                 return 'Reloading will discard the edits currently held in Difference. Keeping the current version will preserve the in-app content and mark it as newer than the disk copy.';
             }
 
-            if (this.isImageTab(tab)) {
-                return 'Reload to show the latest image from disk, or keep the current preview snapshot for now.';
+            if (this.isMediaTab(tab)) {
+                return 'Reload to show the latest version from disk, or keep the current preview snapshot for now.';
             }
 
             return 'Reload to refresh from disk, or keep the current version and continue from the snapshot that is already open here.';
@@ -2816,34 +2978,42 @@
             return layer;
         }
 
-        renderImageTab(tab, previousTop, previousLeft, shouldResetViewerOpenScroll) {
+        renderMediaTab(tab, previousTop, previousLeft, shouldResetViewerOpenScroll) {
             const compare = document.createElement('div');
-            compare.className = 'difference-compare difference-compare--image';
+            compare.className = 'difference-compare difference-compare--media';
 
             const templateColumns = this.getPaneTemplateColumns(tab);
 
             const gridScroll = document.createElement('div');
-            gridScroll.className = 'difference-grid-scroll difference-grid-scroll--image';
+            gridScroll.className = 'difference-grid-scroll difference-grid-scroll--media';
             gridScroll.addEventListener('scroll', () => this.handleGridScroll());
 
             const grid = document.createElement('div');
-            grid.className = 'difference-grid difference-grid--image';
+            grid.className = 'difference-grid difference-grid--media';
 
             const headers = document.createElement('div');
             headers.className = 'difference-pane-headers';
             headers.style.gridTemplateColumns = templateColumns;
+            const mediaGroups = this.getTabGroupIndices(tab);
             tab.panes.forEach((pane, paneIndex) => {
-                headers.appendChild(this.createPaneHeader(tab, pane, paneIndex));
+                headers.appendChild(this.createPaneHeader(
+                    tab,
+                    pane,
+                    paneIndex,
+                    mediaGroups ? mediaGroups.indices[paneIndex] : null,
+                    mediaGroups ? mediaGroups.distinctGroupCount : 0
+                ));
             });
             grid.appendChild(headers);
             this.headersContainerEl = headers;
 
             const panesRow = document.createElement('div');
-            panesRow.className = 'difference-image-row';
+            panesRow.className = 'difference-media-row';
             panesRow.style.gridTemplateColumns = templateColumns;
 
+            const isAudio = this.isAudioTab(tab);
             tab.panes.forEach((pane, paneIndex) => {
-                panesRow.appendChild(this.createImagePane(tab, pane, paneIndex));
+                panesRow.appendChild(isAudio ? this.createAudioPane(tab, pane, paneIndex) : this.createImagePane(tab, pane, paneIndex));
             });
 
             grid.appendChild(panesRow);
@@ -2936,8 +3106,8 @@
                 ? this.pendingRowReveal
                 : null;
 
-            if (this.isImageTab(tab)) {
-                this.renderImageTab(tab, previousTop, previousLeft, shouldResetViewerOpenScroll);
+            if (this.isMediaTab(tab)) {
+                this.renderMediaTab(tab, previousTop, previousLeft, shouldResetViewerOpenScroll);
                 return;
             }
 
@@ -2959,8 +3129,15 @@
             headers.className = 'difference-pane-headers';
             headers.style.gridTemplateColumns = templateColumns;
 
+            const paneGroups = this.getTabGroupIndices(tab);
             tab.panes.forEach((pane, paneIndex) => {
-                headers.appendChild(this.createPaneHeader(tab, pane, paneIndex));
+                headers.appendChild(this.createPaneHeader(
+                    tab,
+                    pane,
+                    paneIndex,
+                    paneGroups ? paneGroups.indices[paneIndex] : null,
+                    paneGroups ? paneGroups.distinctGroupCount : 0
+                ));
             });
 
             grid.appendChild(headers);
@@ -3160,13 +3337,13 @@
         updateStatusForTab(tab) {
             const activePane = tab.panes[tab.focusPaneIndex];
             const conflictCount = tab.panes.filter((pane) => this.hasPaneDiskConflict(pane)).length;
-            if (this.isImageTab(tab)) {
+            if (this.isMediaTab(tab)) {
                 const availableCount = tab.panes.filter((pane) => pane.exists && !pane.error).length;
                 const missingCount = tab.panes.filter((pane) => !pane.exists).length;
                 const errorCount = tab.panes.filter((pane) => Boolean(pane.error)).length;
                 const summaryParts = [
                     'Active: ' + (activePane?.label || 'n/a'),
-                    `${availableCount} image preview${availableCount === 1 ? '' : 's'}`
+                    `${availableCount} ${tab.mode} preview${availableCount === 1 ? '' : 's'}`
                 ];
 
                 if (missingCount) {
@@ -3213,20 +3390,20 @@
             const tab = this.getActiveTab();
             const hasSelection = Boolean(tab?.selection);
             const dirtyTabs = this.tabs.some(item => item.panes.some(pane => pane.dirty));
-            const imageTab = this.isImageTab(tab);
+            const mediaTab = this.isMediaTab(tab);
             const lockedTab = this.tabHasInteractionLock(tab);
             const anyLockedTabs = this.hasAnyUnresolvedDiskChanges() || this.hasAnyReferenceRebuildLock();
 
             this.toggleDisabled(this.saveAllBtn, !dirtyTabs || anyLockedTabs);
             this.toggleDisabled(this.reloadBtn, !tab);
-            this.toggleDisabled(this.prevHunkBtn, !tab || imageTab || !tab.hunks.length);
-            this.toggleDisabled(this.nextHunkBtn, !tab || imageTab || !tab.hunks.length);
-            this.toggleDisabled(this.copySelectionLeftBtn, imageTab || lockedTab || !this.canCopySelectionToNeighbor(-1));
-            this.toggleDisabled(this.copySelectionRightBtn, imageTab || lockedTab || !this.canCopySelectionToNeighbor(1));
-            this.toggleDisabled(this.copyLeftIntoSelectionBtn, imageTab || lockedTab || !this.canCopyNeighborIntoSelection(-1));
-            this.toggleDisabled(this.copyRightIntoSelectionBtn, imageTab || lockedTab || !this.canCopyNeighborIntoSelection(1));
-            this.toggleDisabled(this.mergeLeftRightBtn, imageTab || lockedTab || !hasSelection || !tab || tab.focusPaneIndex <= 0 || tab.focusPaneIndex >= tab.panes.length - 1);
-            this.toggleDisabled(this.mergeRightLeftBtn, imageTab || lockedTab || !hasSelection || !tab || tab.focusPaneIndex <= 0 || tab.focusPaneIndex >= tab.panes.length - 1);
+            this.toggleDisabled(this.prevHunkBtn, !tab || mediaTab || !tab.hunks.length);
+            this.toggleDisabled(this.nextHunkBtn, !tab || mediaTab || !tab.hunks.length);
+            this.toggleDisabled(this.copySelectionLeftBtn, mediaTab || lockedTab || !this.canCopySelectionToNeighbor(-1));
+            this.toggleDisabled(this.copySelectionRightBtn, mediaTab || lockedTab || !this.canCopySelectionToNeighbor(1));
+            this.toggleDisabled(this.copyLeftIntoSelectionBtn, mediaTab || lockedTab || !this.canCopyNeighborIntoSelection(-1));
+            this.toggleDisabled(this.copyRightIntoSelectionBtn, mediaTab || lockedTab || !this.canCopyNeighborIntoSelection(1));
+            this.toggleDisabled(this.mergeLeftRightBtn, mediaTab || lockedTab || !hasSelection || !tab || tab.focusPaneIndex <= 0 || tab.focusPaneIndex >= tab.panes.length - 1);
+            this.toggleDisabled(this.mergeRightLeftBtn, mediaTab || lockedTab || !hasSelection || !tab || tab.focusPaneIndex <= 0 || tab.focusPaneIndex >= tab.panes.length - 1);
         }
 
         toggleDisabled(element, disabled) {
@@ -3798,7 +3975,7 @@
             }
 
             const activeTab = this.getActiveTab();
-            const imageTab = this.isImageTab(activeTab);
+            const mediaTab = this.isMediaTab(activeTab);
 
             const primaryModifier = event.ctrlKey || event.metaKey;
             const undoShortcut = primaryModifier && !event.shiftKey && !event.altKey && this.eventMatchesShortcutKey(event, {
@@ -3831,13 +4008,13 @@
             }
 
             if (!event.ctrlKey && !event.altKey && !event.metaKey) {
-                if (!imageTab && event.shiftKey && event.key === 'ArrowUp') {
+                if (!mediaTab && event.shiftKey && event.key === 'ArrowUp') {
                     event.preventDefault();
                     this.queueSelectionMove(-1, true, event.repeat);
                     return;
                 }
 
-                if (!imageTab && event.shiftKey && event.key === 'ArrowDown') {
+                if (!mediaTab && event.shiftKey && event.key === 'ArrowDown') {
                     event.preventDefault();
                     this.queueSelectionMove(1, true, event.repeat);
                     return;
@@ -3863,19 +4040,19 @@
                     return;
                 }
 
-                if (!imageTab && event.key === 'ArrowUp') {
+                if (!mediaTab && event.key === 'ArrowUp') {
                     event.preventDefault();
                     this.queueSelectionMove(-1, false, event.repeat);
                     return;
                 }
 
-                if (!imageTab && event.key === 'ArrowDown') {
+                if (!mediaTab && event.key === 'ArrowDown') {
                     event.preventDefault();
                     this.queueSelectionMove(1, false, event.repeat);
                     return;
                 }
 
-                if (!imageTab && event.key === 'Delete') {
+                if (!mediaTab && event.key === 'Delete') {
                     event.preventDefault();
                     this.deleteSelection();
                     return;

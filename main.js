@@ -893,7 +893,9 @@ function finalizeHashesForRelativePaths(state, relativePaths) {
         }
 
         fileEntries.forEach(fileEntry => {
-            fileEntry.hash = getSmartHash(fileEntry.path);
+            const hashes = getSmartHashes(fileEntry.path);
+            fileEntry.hash = hashes.hash;
+            fileEntry.comparableHash = hashes.comparableHash;
         });
     });
 }
@@ -1173,9 +1175,22 @@ function getFileDiskSnapshot(filePath) {
     }
 }
 
+function getMediaKindForFilePath(filePath) {
+    if (DifferenceFileTypes.isImageFilePath(filePath)) {
+        return 'image';
+    }
+
+    if (DifferenceFileTypes.isAudioFilePath(filePath)) {
+        return 'audio';
+    }
+
+    return 'text';
+}
+
 ipcMain.handle('read-files', async (e, filePaths) => {
     return filePaths.map(filePath => {
-        const imageFile = DifferenceFileTypes.isImageFilePath(filePath);
+        const kind = getMediaKindForFilePath(filePath);
+        const isMedia = kind !== 'text';
         const diskSnapshot = getFileDiskSnapshot(filePath);
 
         try {
@@ -1183,26 +1198,26 @@ ipcMain.handle('read-files', async (e, filePaths) => {
                 return {
                     path: filePath,
                     exists: false,
-                    kind: imageFile ? 'image' : 'text',
+                    kind,
                     content: '',
                     dataUrl: '',
                     size: diskSnapshot.size,
                     mtimeMs: diskSnapshot.mtimeMs,
-                    mimeType: imageFile
+                    mimeType: isMedia
                         ? DifferenceFileTypes.getMimeTypeForFilePath(filePath)
                         : '',
                     error: diskSnapshot.error || ''
                 };
             }
 
-            if (imageFile) {
+            if (isMedia) {
                 const buffer = fs.readFileSync(filePath);
                 const mimeType = DifferenceFileTypes.getMimeTypeForFilePath(filePath);
 
                 return {
                     path: filePath,
                     exists: true,
-                    kind: 'image',
+                    kind,
                     content: '',
                     dataUrl: `data:${mimeType};base64,${buffer.toString('base64')}`,
                     size: diskSnapshot.size,
@@ -1223,12 +1238,12 @@ ipcMain.handle('read-files', async (e, filePaths) => {
             return {
                 path: filePath,
                 exists: false,
-                kind: imageFile ? 'image' : 'text',
+                kind,
                 content: '',
                 dataUrl: '',
                 size: diskSnapshot.size,
                 mtimeMs: diskSnapshot.mtimeMs,
-                mimeType: imageFile
+                mimeType: isMedia
                     ? DifferenceFileTypes.getMimeTypeForFilePath(filePath)
                     : '',
                 error: err.message
@@ -1761,40 +1776,54 @@ ipcMain.handle('redo-main-action', async () => {
 function normalizeContent(buffer) {
     return buffer
         .toString('utf8')
-        .replace(/\r\n/g, '\n') // CRLF в†’ LF
-        .trim();                // РјР°С…Р° trailing whitespace
+        .replace(/\r\n/g, '\n') // CRLF -> LF
+        .trim();                // trim outer whitespace
 }
 
-function getFileHash(filePath) {
+// Mirrors difference-engine.js's normalizeComparableLine (per-line trim,
+// used there to decide whether two lines should render as "changed"). A
+// raw byte hash alone can call two copies of a file "different" purely
+// because of per-line whitespace (trailing spaces, reindentation) that the
+// difference viewer itself never highlights - which then made the content
+// grouping feature split files into groups that looked identical when
+// actually opened. Hashing this normalized form instead keeps "different
+// enough to group apart" in sync with "different enough to show in red".
+function normalizeContentForComparison(buffer) {
+    return buffer
+        .toString('utf8')
+        .replace(/\r\n/g, '\n')
+        .split('\n')
+        .map((line) => line.trim())
+        .join('\n')
+        .trim();
+}
+
+function getFileHashes(filePath) {
     try {
         const data = fs.readFileSync(filePath);
 
-        const normalized = normalizeContent(data);
-
-        return crypto
-            .createHash('md5')
-            .update(normalized)
-            .digest('hex');
+        return {
+            hash: crypto.createHash('md5').update(normalizeContent(data)).digest('hex'),
+            comparableHash: crypto.createHash('md5').update(normalizeContentForComparison(data)).digest('hex')
+        };
     } catch (e) {
-        return null;
+        return { hash: null, comparableHash: null };
     }
 }
 
 const hashCache = new Map();
 
-function getSmartHash(filePath) {
+function getSmartHashes(filePath) {
     const stat = fs.statSync(filePath);
     const key = stat.size + '_' + stat.mtimeMs;
 
-    // вњ… Р°РєРѕ РІРµС‡Рµ СЃРјРµ РіРѕ СЃРјСЏС‚Р°Р»Рё в†’ РІСЂСЉС‰Р°РјРµ РєРµС€Р°
-    if (hashCache.has(filePath) && hashCache.get(filePath).key === key) {
-        return hashCache.get(filePath).hash;
+    const cached = hashCache.get(filePath);
+    if (cached && cached.key === key) {
+        return cached;
     }
 
-    // вќ— СЃР°РјРѕ Р°РєРѕ РёРјР° РїСЂРѕРјСЏРЅР° в†’ РїСЂР°РІРёРј hash
-    const hash = getFileHash(filePath);
+    const entry = { key, ...getFileHashes(filePath) };
+    hashCache.set(filePath, entry);
 
-    hashCache.set(filePath, { key, hash });
-
-    return hash;
+    return entry;
 }

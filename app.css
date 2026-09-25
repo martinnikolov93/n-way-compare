@@ -1036,6 +1036,13 @@ body {
   background: #fff6dd;
 }
 
+.compare-slot-status-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .compare-slot-status {
   display: inline-flex;
   align-items: center;
@@ -1063,6 +1070,19 @@ body {
 .compare-slot-status.is-diff {
   background: rgba(255, 228, 209, 0.98);
   color: #aa4d13;
+}
+
+.compare-slot-group-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: #ffffff;
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .compare-slot-controls {

@@ -529,6 +529,13 @@
   gap: 12px;
 }
 
+.difference-pane-label-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .difference-pane-label {
   min-width: 0;
   font-size: 12px;
@@ -537,6 +544,20 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.difference-pane-group-badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 16px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: #ffffff;
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .difference-pane-file {
@@ -578,22 +599,22 @@
   padding: 4px 6px 10px;
 }
 
-.difference-compare--image {
+.difference-compare--media {
   background: #d8d8d8;
 }
 
-.difference-grid--image {
+.difference-grid--media {
   min-width: max-content;
   padding: 4px 6px 12px;
 }
 
-.difference-image-row {
+.difference-media-row {
   display: grid;
   gap: 0;
   align-items: stretch;
 }
 
-.difference-image-pane {
+.difference-media-pane {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -607,18 +628,18 @@
   background: #eef2f8;
 }
 
-.difference-image-pane.is-active {
+.difference-media-pane.is-active {
   background: #e5eefc;
 }
 
-.difference-image-pane.is-sticky-pane {
+.difference-media-pane.is-sticky-pane {
   position: sticky;
   left: 0;
   z-index: 5;
   box-shadow: 8px 0 16px rgba(34, 43, 55, 0.16);
 }
 
-.difference-image-viewport {
+.difference-media-viewport {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -630,7 +651,7 @@
   background: #d6dde9;
 }
 
-.difference-image-frame {
+.difference-media-frame {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -647,7 +668,13 @@
   box-shadow: 0 8px 18px rgba(15, 23, 42, 0.12);
 }
 
-.difference-image-meta {
+.difference-audio {
+  display: block;
+  width: 320px;
+  max-width: 100%;
+}
+
+.difference-media-meta {
   font-size: 11px;
   color: #42536b;
   white-space: nowrap;
@@ -655,7 +682,7 @@
   text-overflow: ellipsis;
 }
 
-.difference-image-placeholder {
+.difference-media-placeholder {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -668,13 +695,13 @@
   color: #5d6d84;
 }
 
-.difference-image-placeholder-title {
+.difference-media-placeholder-title {
   font-size: 14px;
   font-weight: 700;
   color: #334155;
 }
 
-.difference-image-placeholder-detail {
+.difference-media-placeholder-detail {
   max-width: 320px;
   font-size: 12px;
   line-height: 1.45;
